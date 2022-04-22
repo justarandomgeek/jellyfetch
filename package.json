@@ -1,0 +1,41 @@
+{
+  "name": "jellyfetch",
+  "type": "module",
+  "version": "0.0.1",
+  "description": "download content from a jellyfin server",
+  "main": "./out/index.js",
+  "bin": {
+    "jellyfetch": "./out/index.js"
+  },
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "lint": "eslint -c .eslintrc.json --ext .ts ./src",
+    "build": "tsc -p .",
+    "local": "sudo npm i -g && jellyfetch",
+    "refresh": "rm -rf ./node_modules ./package-lock.json && npm install"
+  },
+  "author": "justarandomgeek",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/cli-progress": "^3.9.2",
+    "@types/inquirer": "^8.2.1",
+    "@types/node": "^17.0.25",
+    "@types/progress-stream": "^2.0.2",
+    "@typescript-eslint/eslint-plugin": "^5.20.0",
+    "@typescript-eslint/parser": "^5.20.0",
+    "eslint": "^8.14.0",
+    "ts-node": "^10.7.0",
+    "tsconfig-paths": "^3.14.1",
+    "typescript": "^4.6.3"
+  },
+  "dependencies": {
+    "cli-progress": "^3.10.0",
+    "commander": "^9.2.0",
+    "filesize": "^8.0.7",
+    "inquirer": "^8.2.2",
+    "node-fetch": "^3.2.3",
+    "node-machine-id": "^1.1.12",
+    "progress-stream": "^2.0.0",
+    "xmlbuilder2": "^3.0.2"
+  }
+}

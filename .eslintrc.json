@@ -1,0 +1,59 @@
+{
+    "env": {
+        "browser": true,
+        "es6": true,
+        "node": true
+    },
+    "parser": "@typescript-eslint/parser",
+    "parserOptions": {
+        "project": "./tsconfig.json",
+        "sourceType": "module"
+    },
+    "plugins": [
+        "@typescript-eslint"
+    ],
+    "rules": {
+        "@typescript-eslint/member-delimiter-style": [
+            "error",
+            {
+                "multiline": {
+                    "delimiter": "none",
+                    "requireLast": true
+                },
+                "singleline": {
+                    "delimiter": "semi",
+                    "requireLast": false
+                }
+            }
+        ],
+        "@typescript-eslint/semi": [
+            "error"
+        ],
+        "brace-style": ["error", "1tbs", { "allowSingleLine": true }],
+        "block-spacing": "error",
+        "space-before-blocks": "error",
+        "keyword-spacing":"error",
+        "arrow-spacing":["error",{"before":false,"after":false}],
+        "switch-colon-spacing":"error",
+        "comma-spacing":"error",
+        "comma-style":"error",
+        "comma-dangle": ["error", "always-multiline"],
+        "key-spacing":"error",
+        "indent": ["error", 2, { "SwitchCase":1}],
+        "curly": "error",
+        "eqeqeq": [
+            "error",
+            "always"
+        ],
+        "no-bitwise": "error",
+        "no-redeclare": "error",
+        "no-unused-expressions": [
+            "error",
+            {
+                "allowShortCircuit":true,
+                "allowTernary": true
+            }
+        ],
+        "no-var": "error"
+    }
+}
