@@ -1,0 +1,13 @@
+non-admin can't read physicalpaths roots
+  so need metadata-ish-based path generation
+  {Name} ({Year})/{mediasource.name}
+  {SeriesName} ({SeriesYear})/{SeasonName}/{mediasource.name}
+  options for characters to exclude from names
+more complete nfo files?
+  only really needed if info isn't fetched from online
+  special episode air order fields would be nice
+progress bars to 100% when finished
+multiple download streams at once?
+prompt before overwriting existing files?
+enumerate all files and prompt before downloading?
+

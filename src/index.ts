@@ -21,6 +21,15 @@ interface ServerInfo {
   accessToken?:string
 };
 
+const patterns = {
+  Movie: "{Name} ({ProductionYear})",
+  Versions: " - {Version}",
+  SeriesFolder: "{Name} ({ProductionYear})",
+  SeasonFolder: "{Name}",
+  Episode: "{SeriesName} - {Index} - {Name}",
+  StripChars: /[:*<>\"?|\\\/]/g,
+};
+
 async function getAuthedJellyfinApi(server:string) {
   let servers:ServerInfo[];
   try {
@@ -148,6 +157,8 @@ interface ProgramOptions {
   shallow:boolean
 }
 
+const seenItems = new Map<string, Item>();
+
 program
   .version('0.0.1')
   .description("download content from a jellyfin server")
@@ -160,17 +171,68 @@ program
   .action(async (server:string, id:string)=>{
     const {list, nfo, shallow, dest} = program.opts<ProgramOptions>();
     const jserver = await getAuthedJellyfinApi(server);
-    const roots = await jserver.getPhysicalPaths();
-    function adjustPath(path:string) {
-      for (const root of roots) {
-        if (path.startsWith(root)) {
-          return path.replace(root, dest);
-        }
+
+    async function fetchItemInfo(id:string) {
+      let item = seenItems.get(id);
+      if (!item) {
+        item = await jserver.getItem(id);
+        seenItems.set(id, item);
       }
-      throw `Path "${path}" not in any root!`;
+      return item;
     }
 
-    async function fetchItem(item:Item) {
+    async function ItemPath(item:Item|string) {
+      if (typeof item === 'string') {
+        item = await fetchItemInfo(item);
+      }
+      let pattern:string;
+      switch (item.Type) {
+        case "Series":
+          pattern = patterns.SeriesFolder;
+          break;
+        case "Season":
+          pattern = patterns.SeasonFolder;
+          break;
+        case "Episode":
+          pattern = patterns.Episode;
+          break;
+        case "Movie":
+          pattern = patterns.Movie;
+          break;
+        default:
+          throw `No path pattern for ${item.Type} Items`;
+      }
+      return pattern.replace(/\{([a-zA-Z]+)\}/g, (s, token:string)=>{
+        const it = <Item>item;
+
+        if (token === "Index") {
+          let index = `S${it.ParentIndexNumber?.toString().padStart(2, '0')}`;
+          if (typeof it.IndexNumber === 'number') {
+            index += `E${it.IndexNumber?.toString().padStart(2, '0')}`;
+            if (typeof it.IndexNumberEnd === 'number') {
+              index += `-E${it.IndexNumberEnd.toString().padStart(2, '0')}`;
+            }
+          }
+          return index;
+        }
+
+        if (it.hasOwnProperty(token)) {
+          const tok = it[<keyof Item>token];
+          if (typeof tok === 'string') {
+            return tok.replace(patterns.StripChars, '');
+          }
+          if (typeof tok === 'number') {
+            return tok.toString();
+          }
+        }
+        return s;
+      });
+    }
+
+    async function fetchItem(item:Item|string) {
+      if (typeof item === 'string') {
+        item = await fetchItemInfo(item);
+      }
       switch (item.Type) {
         case "Series":
           return fetchSeries(item);
@@ -181,46 +243,66 @@ program
         case "Movie":
           return fetchMovie(item);
         case "BoxSet":
-          return fetchBoxSet(item);
+        case "Playlist":
+        case "CollectionFolder":
+          return fetchCollection(item);
         default:
           console.log(`Downloading ${item.Type} Items not yet supported`);
           break;
       }
     }
 
-    async function fetchBoxSet(item:Item) {
+    async function fetchCollection(item:Item) {
       const children = await jserver.getItemChildren(item.Id);
       for (const child of children.Items) {
         await fetchItem(child);
       }
     }
 
-    async function fetchMedia(item:Item, media:MediaSource) {
-      const vidpath = adjustPath(media.Path!);
-      const p = path.parse(vidpath);
-      const episodenfo = path.join(p.dir, `${p.name}.nfo`);
+    async function fetchMedia(item:Item, dirpath:string, media:MediaSource) {
+      if (!media.Name) {
+        console.log(`No name for media ${media.Id!} on Item ${item.Id}`);
+        return;
+      }
+      const medianame = media.Name.replace(patterns.StripChars, '');
+      const vidpath = path.join(dirpath, `${medianame}.${media.Container}`);
+      
+      const nfopath = path.join(dirpath, `${medianame}.nfo`);
 
-      console.log(`${item.Type!} Video Metadata ${episodenfo}`);
+      console.log(`${item.Type!} Video Metadata ${nfopath}`);
       if (!list) {
-        await writeFile(episodenfo, makeNfo(item));
+        await writeFile(nfopath, makeNfo(item));
       }
       
       console.log(`Video File: ${vidpath} ${media.Size?filesize(media.Size):""}`);
       if (!list && !nfo) {
-        const file = await jserver.getFile(media.Id);
-        await writeFileProgress(vidpath, file, media.Size);
+        const file = await jserver.getFile(media.Id!);
+        await writeFileProgress(vidpath, file, media.Size!);
       }
       
       for (const stream of media.MediaStreams!) {
         if (stream.IsExternal) {
-          const streampath = adjustPath(stream.Path!);
+          let streampath = path.join(dirpath, medianame);
+          if (stream.Title) {
+            streampath += `.${stream.Title}`;
+          }
+          if (stream.Language) {
+            streampath += `.${stream.Language}`;
+          }
+          if (stream.IsDefault) {
+            streampath += `.default`;
+          }
+          if (stream.IsForced) {
+            streampath += `.forced`;
+          }
+          streampath += `.${stream.Codec}`;
           console.log(`External ${stream.Type} Stream ${stream.Index}: ${streampath}`);
           switch (stream.Type) {
             case "Subtitle":
               switch (stream.Codec) {
                 case "srt":
                   if (!list && !nfo) {
-                    const subs = await jserver.getSubtitle(item.Id, media.Id, stream.Index, "srt");
+                    const subs = await jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt");
                     await writeFile(vidpath, subs);
                   }
                   break;
@@ -238,40 +320,39 @@ program
     }
 
     async function fetchMovie(movie:Item) {
+      const dirpath = path.join(dest, await ItemPath(movie));
       for (const media of movie.MediaSources!) {
-        await fetchMedia(movie, media);
+        await fetchMedia(movie, dirpath, media);
       }
       movie.SpecialFeatureCount && console.log(`SpecialFeatureCount ${movie.SpecialFeatureCount}`);
       movie.LocalTrailerCount && console.log(`LocalTrailerCount ${movie.LocalTrailerCount}`);
     }
 
     async function fetchEpisode(episode:Item) {
+      const dirpath = path.join(dest, ...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(ItemPath)));
       for (const media of episode.MediaSources!) {
-        await fetchMedia(episode, media);
+        await fetchMedia(episode, dirpath, media);
       }
     }
 
     async function fetchSeason(season:Item) {
-      // don't bother with season.nfo if we dont' have at least a season number or external id...
-      // or if it just doesn't have a directory
-      if (season.Path && (season.IndexNumber || (season.ProviderIds && Object.keys(season.ProviderIds).length > 0))) {
-        const seasonnfo = path.join(adjustPath(season.Path!), "season.nfo");
-        console.log(`Season Metadata ${seasonnfo}`);
-        if (!list) {
-          await writeFile(seasonnfo, makeNfo(season));
-        }
+      const seasonnfo = path.join(dest, ...await Promise.all([season.SeriesId!, season].map(ItemPath)), "season.nfo");
+      console.log(`Season Metadata ${seasonnfo}`);
+      if (!list) {
+        await writeFile(seasonnfo, makeNfo(season));
       }
 
       if (!shallow && !nfo) {
         const episodes = await jserver.getEpisodes(season.SeriesId!, season.Id);
         for (const episode of episodes.Items) {
+          seenItems.set(episode.Id, episode);
           await fetchEpisode(episode);
         }
       }
     }
 
     async function fetchSeries(series:Item) {
-      const seriesnfo = path.join(adjustPath(series.Path!), "tvshow.nfo");
+      const seriesnfo = path.join(dest, await ItemPath(series), "tvshow.nfo");
       console.log(`Series Metadata ${seriesnfo}`);
       if (!list) {
         await writeFile(seriesnfo, makeNfo(series));
@@ -280,11 +361,12 @@ program
       if (!shallow) {
         const seasons = await jserver.getSeasons(series.Id);
         for (const season of seasons.Items) {
+          seenItems.set(season.Id, season);
           await fetchSeason(season);
         }
       }
     }
 
-    return fetchItem(await jserver.getItem(id));
+    return fetchItem(id);
   })
   .parseAsync();
