@@ -1,7 +1,5 @@
 non-admin can't read physicalpaths roots
   so need metadata-ish-based path generation
-  {Name} ({Year})/{mediasource.name}
-  {SeriesName} ({SeriesYear})/{SeasonName}/{mediasource.name}
 more complete nfo files?
 multiple download streams at once?
 prompt before overwriting existing files?
