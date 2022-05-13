@@ -237,8 +237,8 @@ program
               switch (stream.Codec) {
                 case "srt":
                   if (!list && !nfo) {
-                    const subs = await jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt");
-                    await writeFile(vidpath, subs);
+                    const subs = jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt");
+                    await writeFile(streampath, subs);
                   }
                   break;
                 default:
