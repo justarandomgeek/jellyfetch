@@ -63,34 +63,37 @@ async function getAuthedJellyfinApi(server:string) {
   return jserver;
 }
 
-async function writeFile(filepath:string, data:string|NodeJS.ReadableStream) {
+async function writeFile(filepath:string, data:string|NodeJS.ReadableStream|Promise<string>|Promise<NodeJS.ReadableStream>) {
   await fsp.mkdir(path.dirname(filepath), {recursive: true});
-  return fsp.writeFile(filepath, data);
+  return fsp.writeFile(filepath, await data);
 }
 
 const bar = new SingleBar({
-  format: '[{bar}] {percentage}% {value}/{total} {speed}ETA: {eta_formatted}',
+  format: '[{bar}] | {percentage}% | {value} / {total} | {filename}  {speed}',
   formatValue: function(v, options, type) {
     switch (type) {
       case 'value':
       case 'total':
-        return filesize(v, {pad: true, precision: 3});
+        return filesize(v).padStart(10);
       default:
         return cliprog.Format.ValueFormat(v, options, type);
     }
   },
+  autopadding: true,
 });
 
-async function writeFileProgress(filepath:string, data:NodeJS.ReadableStream, size:number) {
-  bar.start(size, 0, {speed: ""});
-  await fsp.mkdir(path.dirname(filepath), {recursive: true});
+async function writeFileProgress(filepath:string, data:NodeJS.ReadableStream|Promise<NodeJS.ReadableStream>, size:number) {
+  const dir = fsp.mkdir(path.dirname(filepath), {recursive: true});
+  const filename = path.basename(filepath);
+  bar.start(size, 0, {speed: "", filename: filename});
   const ps = progress_stream( 
     {length: size, time: 200 },
-    progress=>bar.update(progress.transferred, {speed: filesize(progress.speed, {pad: true, precision: 2})+"/s "})
+    progress=>bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
   );
-  await pipelineAsync(data, ps, fs.createWriteStream(filepath));
+  await dir;
+  await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
   const progress = ps.progress();
-  bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s "});
+  bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename});
   bar.stop();
 }
 
@@ -211,7 +214,7 @@ program
       
       console.log(`Video File: ${vidpath} ${media.Size?filesize(media.Size):""}`);
       if (!list && !nfo) {
-        const file = await jserver.getFile(media.Id!);
+        const file = jserver.getFile(media.Id!);
         await writeFileProgress(vidpath, file, media.Size!);
       }
       
