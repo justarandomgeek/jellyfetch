@@ -14,7 +14,7 @@ const pipelineAsync = promisify(pipeline);
 
 import progress_stream from "progress-stream";
 import cliprog, { SingleBar } from "cli-progress";
-import { makeNfo } from './nfowriter';
+import { makeNfo } from './nfowriter.js';
 
 interface ServerInfo {
   baseUrl:string
