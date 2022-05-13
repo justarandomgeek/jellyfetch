@@ -125,10 +125,8 @@ program
       return item;
     }
 
-    async function ItemPath(item:Item|string) {
-      if (typeof item === 'string') {
-        item = await fetchItemInfo(item);
-      }
+    async function ItemPath(itemSpec:Item|string) {
+      const item =  (typeof itemSpec === 'string') ? await fetchItemInfo(itemSpec) : itemSpec;
       let pattern:string;
       switch (item.Type) {
         case "Series":
@@ -144,21 +142,19 @@ program
           throw `No path pattern for ${item.Type} Items`;
       }
       return pattern.replace(/\{([a-zA-Z]+)\}/g, (s, token:string)=>{
-        const it = <Item>item;
-
         if (token === "Index") {
-          let index = `S${it.ParentIndexNumber?.toString().padStart(2, '0')}`;
-          if (typeof it.IndexNumber === 'number') {
-            index += `E${it.IndexNumber?.toString().padStart(2, '0')}`;
-            if (typeof it.IndexNumberEnd === 'number') {
-              index += `-E${it.IndexNumberEnd.toString().padStart(2, '0')}`;
+          let index = `S${item.ParentIndexNumber?.toString().padStart(2, '0')}`;
+          if (typeof item.IndexNumber === 'number') {
+            index += `E${item.IndexNumber?.toString().padStart(2, '0')}`;
+            if (typeof item.IndexNumberEnd === 'number') {
+              index += `-E${item.IndexNumberEnd.toString().padStart(2, '0')}`;
             }
           }
           return index;
         }
 
-        if (it.hasOwnProperty(token)) {
-          const tok = it[<keyof Item>token];
+        if (item.hasOwnProperty(token)) {
+          const tok = item[<keyof Item>token];
           if (typeof tok === 'string') {
             return tok.replace(patterns.StripChars, '');
           }
@@ -170,10 +166,8 @@ program
       });
     }
 
-    async function fetchItem(item:Item|string) {
-      if (typeof item === 'string') {
-        item = await fetchItemInfo(item);
-      }
+    async function fetchItem(itemSpec:Item|string) {
+      const item =  (typeof itemSpec === 'string') ? await fetchItemInfo(itemSpec) : itemSpec;
       switch (item.Type) {
         case "Series":
           return fetchSeries(item);
