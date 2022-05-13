@@ -372,20 +372,21 @@ export class Jellyfin {
   }
 
   private async internalFetch(path:string, body?:BodyInit) {
+    const headers = new Headers ({
+      "X-Emby-Authorization": this.AuthorizationHeader,
+    });
     const options:RequestInit = {
       method: 'GET',
-      headers: new Headers ({
-        "X-Emby-Authorization": this.AuthorizationHeader,
-      }),
+      headers: headers,
     };
     if (body) {
       options.method = "POST";
       options.body = body;
       if (typeof body === 'string') {
-        (<Headers>options.headers).append('Content-Type', 'application/json');
+        headers.append('Content-Type', 'application/json');
       }
     }
-    return await fetch(new URL(path, this.server).toString(), options);
+    return fetch(new URL(path, this.server).toString(), options);
   }
 
   private async internalFetchJson<T>(path:string, body?:BodyInit) {
