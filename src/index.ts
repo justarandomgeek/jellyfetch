@@ -7,7 +7,6 @@ import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import { posix as path } from 'path';
 import inquirer from "inquirer";
-import * as xmlbuilder2 from 'xmlbuilder2';
 
 import { pipeline } from 'stream';
 import { promisify } from 'util';
@@ -15,6 +14,7 @@ const pipelineAsync = promisify(pipeline);
 
 import progress_stream from "progress-stream";
 import cliprog, { SingleBar } from "cli-progress";
+import { makeNfo } from './nfowriter';
 
 interface ServerInfo {
   baseUrl:string
@@ -23,10 +23,8 @@ interface ServerInfo {
 
 const patterns = {
   Movie: "{Name} ({ProductionYear})",
-  Versions: " - {Version}",
   SeriesFolder: "{Name} ({ProductionYear})",
   SeasonFolder: "{Name}",
-  Episode: "{SeriesName} - {Index} - {Name}",
   StripChars: /[:*<>\"?|\\\/]/g,
 };
 
@@ -71,83 +69,29 @@ async function writeFile(filepath:string, data:string|NodeJS.ReadableStream) {
 }
 
 const bar = new SingleBar({
-  format: '[{bar}] {percentage}% || {value}/{total} || {speed}',
+  format: '[{bar}] {percentage}% {value}/{total} {speed}ETA: {eta_formatted}',
   formatValue: function(v, options, type) {
     switch (type) {
       case 'value':
       case 'total':
-        return filesize(v);
+        return filesize(v, {pad: true, precision: 3});
       default:
         return cliprog.Format.ValueFormat(v, options, type);
     }
   },
 });
 
-async function writeFileProgress(filepath:string, file:NodeJS.ReadableStream, size:number) {
+async function writeFileProgress(filepath:string, data:NodeJS.ReadableStream, size:number) {
   bar.start(size, 0, {speed: ""});
   await fsp.mkdir(path.dirname(filepath), {recursive: true});
-  await pipelineAsync(
-    file,
-    progress_stream( 
-      {
-        length: size,
-        time: 200,
-      },
-      (progress)=>{
-        bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s"});
-      }
-    ),
-    fs.createWriteStream(filepath),
+  const ps = progress_stream( 
+    {length: size, time: 200 },
+    progress=>bar.update(progress.transferred, {speed: filesize(progress.speed, {pad: true, precision: 2})+"/s "})
   );
+  await pipelineAsync(data, ps, fs.createWriteStream(filepath));
+  const progress = ps.progress();
+  bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s "});
   bar.stop();
-}
-
-
-function rootNfoElemName(itemType:string) {
-  switch (itemType) {
-    case "Movie":
-      return "movie";
-    case "Series":
-      return "tvshow";
-    case "Season":
-      return "season";
-    case "Episode":
-      return "episodedetails";
-  
-    default:
-      throw `Cannot make Nfo for ${itemType}`;
-  }
-}
-function makeNfo(item:Item) {
-  const doc = xmlbuilder2.create({version: '1.0', encoding: 'utf-8'});
-  const root = doc.ele(rootNfoElemName(item.Type!));
-  root.ele("plot").txt(item.Overview ?? "");
-  root.ele("title").txt(item.Name ?? "");
-  item.OriginalTitle && root.ele("originaltitle").txt(item.OriginalTitle);
-  item.ProductionYear && root.ele("year").txt(item.ProductionYear.toString());
-  item.ProviderIds?.Tvdb && root.ele("tvdbid").txt(item.ProviderIds?.Tvdb);
-  item.ProviderIds?.Imdb && root.ele(item.Type==="Series"?"imdb_id":"imdbid").txt(item.ProviderIds?.Imdb);
-  item.ProviderIds?.TvRage && root.ele("tvrageid").txt(item.ProviderIds?.TvRage);
-  item.ProviderIds?.Tmdb && root.ele("tmdbid").txt(item.ProviderIds?.Tmdb);
-  
-  switch (item.Type) {
-    case "Series":
-      root.ele("season").txt("-1");
-      root.ele("episode").txt("-1");
-      break;
-    case "Season":
-      root.ele("seasonnumber").txt(item.IndexNumber!.toString());
-      break;
-    case "Episode":
-      root.ele("season").txt(item.ParentIndexNumber!.toString());
-      root.ele("episode").txt(item.IndexNumber!.toString());
-      break;
-    case "Movie":
-      break;
-    default:
-      break;
-  }
-  return doc.end({prettyPrint: true});
 }
 
 interface ProgramOptions {
@@ -192,9 +136,6 @@ program
           break;
         case "Season":
           pattern = patterns.SeasonFolder;
-          break;
-        case "Episode":
-          pattern = patterns.Episode;
           break;
         case "Movie":
           pattern = patterns.Movie;

@@ -418,12 +418,6 @@ export class Jellyfin {
     }
   }
 
-  public async getPhysicalPaths() {
-    const result = await this.internalFetch("/Library/PhysicalPaths");
-    if (!result.ok) { throw result.statusText; }
-    return <Promise<[string]>>result.json();
-  }
-
   public async getItem(itemId:string) {
     return this.internalFetchJson<Item>(`/Users/${this.session!.UserId}/Items/${itemId}`);
   }
