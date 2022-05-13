@@ -269,7 +269,11 @@ program
     async function fetchEpisode(episode:Item) {
       const dirpath = path.join(dest, ...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(ItemPath)));
       for (const media of episode.MediaSources!) {
-        await fetchMedia(episode, dirpath, media);
+        if (media.Type === "Default") {
+          await fetchMedia(episode, dirpath, media);
+        } else {
+          console.log(`Skipping ${media.Type} media ${media.Id} on ${episode.Id}`);
+        }
       }
     }
 
