@@ -1,14 +1,6 @@
 import { Item, Jellyfin, MediaSource } from "./jellyfin";
 import { makeNfo } from './nfowriter.js';
-import filesize from 'filesize';
-import * as fs from 'fs';
-import * as fsp from 'fs/promises';
 import { posix as path } from 'path';
-import { pipeline } from 'stream';
-import { promisify } from 'util';
-const pipelineAsync = promisify(pipeline);
-import progress_stream from "progress-stream";
-import cliprog, { SingleBar } from "cli-progress";
 
 const patterns = {
   Movie: "{Name} ({ProductionYear})",
@@ -18,46 +10,27 @@ const patterns = {
 };
 
 
-async function writeFile(filepath:string, data:string|NodeJS.ReadableStream|Promise<string>|Promise<NodeJS.ReadableStream>) {
-  await fsp.mkdir(path.dirname(filepath), {recursive: true});
-  return fsp.writeFile(filepath, await data);
-}
 
-const bar = new SingleBar({
-  format: '[{bar}] | {percentage}% | {value} / {total} | {filename}  {speed}',
-  formatValue: function(v, options, type) {
-    switch (type) {
-      case 'value':
-      case 'total':
-        return filesize(v).padStart(10);
-      default:
-        return cliprog.Format.ValueFormat(v, options, type);
-    }
-  },
-  autopadding: true,
-});
+export class FetchTask {
+  constructor(
+    readonly destpath:string,
+    readonly datareq:string|(()=>Promise<NodeJS.ReadableStream>),
+    readonly size?:number,
+    readonly meta?:FetchTask,
+    readonly aux?:FetchTask[]
+  ) {}
 
-async function writeFileProgress(filepath:string, data:NodeJS.ReadableStream|Promise<NodeJS.ReadableStream>, size:number) {
-  const dir = fsp.mkdir(path.dirname(filepath), {recursive: true});
-  const filename = path.basename(filepath);
-  bar.start(size, 0, {speed: "", filename: filename});
-  const ps = progress_stream( 
-    {length: size, time: 200 },
-    progress=>bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
-  );
-  await dir;
-  await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
-  const progress = ps.progress();
-  bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename});
-  bar.stop();
+  public get totalsize():number {
+    const meta = this.meta?.totalsize ?? 0;
+    const aux = this.aux?.map(f=>f.totalsize??0).reduce((a, b)=>a+b, 0) ?? 0;
+    return (this.size??0) + meta + aux;
+  }
 }
 
 export class JFetch {
   constructor(
     readonly jserver:Jellyfin,
     readonly dest:string,
-    readonly list?:boolean,
-    readonly nfo?:boolean,
     readonly shallow?:boolean
   ) {}
 
@@ -90,17 +63,6 @@ export class JFetch {
         throw `No path pattern for ${item.Type} Items`;
     }
     return pattern.replace(/\{([a-zA-Z]+)\}/g, (s, token:string)=>{
-      if (token === "Index") {
-        let index = `S${item.ParentIndexNumber?.toString().padStart(2, '0')}`;
-        if (typeof item.IndexNumber === 'number') {
-          index += `E${item.IndexNumber?.toString().padStart(2, '0')}`;
-          if (typeof item.IndexNumberEnd === 'number') {
-            index += `-E${item.IndexNumberEnd.toString().padStart(2, '0')}`;
-          }
-        }
-        return index;
-      }
-
       if (item.hasOwnProperty(token)) {
         const tok = item[<keyof Item>token];
         if (typeof tok === 'string') {
@@ -114,7 +76,7 @@ export class JFetch {
     });
   }
 
-  async fetchItem(itemSpec:Item|string) {
+  async fetchItem(itemSpec:Item|string): Promise<FetchTask[]> {
     const item =  (typeof itemSpec === 'string') ? await this.fetchItemInfo(itemSpec) : itemSpec;
     switch (item.Type) {
       case "Series":
@@ -131,64 +93,48 @@ export class JFetch {
         return this.fetchCollection(item);
       default:
         console.log(`Downloading ${item.Type} Items not yet supported`);
-        break;
+        return [];
     }
   }
 
   
   async fetchCollection(item:Item) {
     const children = await this.jserver.getItemChildren(item.Id);
+    const result = [];
     for (const child of children.Items) {
-      await this.fetchItem(child);
+      result.push(...await this.fetchItem(child));
     }
+    return result;
   }
 
   async fetchMedia(item:Item, dirpath:string, media:MediaSource) {
+    const result = [];
+
     if (!media.Name) {
       console.log(`No name for media ${media.Id!} on Item ${item.Id}`);
-      return;
+      return [];
     }
     const medianame = media.Name.replace(patterns.StripChars, '');
     const vidpath = path.join(dirpath, `${medianame}.${media.Container}`);
     
     const nfopath = path.join(dirpath, `${medianame}.nfo`);
-
-    console.log(`${item.Type!} Video Metadata ${nfopath}`);
-    if (!this.list) {
-      await writeFile(nfopath, makeNfo(item));
-    }
-    
-    console.log(`Video File: ${vidpath} ${media.Size?filesize(media.Size):""}`);
-    if (!this.list && !this.nfo) {
-      const file = this.jserver.getFile(media.Id!);
-      await writeFileProgress(vidpath, file, media.Size!);
-    }
+    const nfo = new FetchTask(nfopath, makeNfo(item));
+    const aux:FetchTask[] = [];
+    result.push(new FetchTask(vidpath, ()=>this.jserver.getFile(media.Id!), media.Size!, nfo, aux));
     
     for (const stream of media.MediaStreams!) {
       if (stream.IsExternal) {
         let streampath = path.join(dirpath, medianame);
-        if (stream.Title) {
-          streampath += `.${stream.Title}`;
-        }
-        if (stream.Language) {
-          streampath += `.${stream.Language}`;
-        }
-        if (stream.IsDefault) {
-          streampath += `.default`;
-        }
-        if (stream.IsForced) {
-          streampath += `.forced`;
-        }
+        if (stream.Title) { streampath += `.${stream.Title}`; }
+        if (stream.Language) { streampath += `.${stream.Language}`; }
+        if (stream.IsDefault) { streampath += `.default`; }
+        if (stream.IsForced) { streampath += `.forced`; }
         streampath += `.${stream.Codec}`;
-        console.log(`External ${stream.Type} Stream ${stream.Index}: ${streampath}`);
         switch (stream.Type) {
           case "Subtitle":
             switch (stream.Codec) {
               case "srt":
-                if (!this.list && !this.nfo) {
-                  const subs = this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt");
-                  await writeFile(streampath, subs);
-                }
+                aux.push(new FetchTask(streampath, ()=>this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt")));
                 break;
               default:
                 console.log(`Downloading ${stream.Codec} Subtitle streams not yet supported`);
@@ -201,58 +147,60 @@ export class JFetch {
         }
       }
     }
+
+    return result;
   }
 
   async fetchMovie(movie:Item) {
     const dirpath = path.join(this.dest, await this.ItemPath(movie));
+    const result = [];
     for (const media of movie.MediaSources!) {
-      await this.fetchMedia(movie, dirpath, media);
+      result.push(...await this.fetchMedia(movie, dirpath, media));
     }
-    movie.SpecialFeatureCount && console.log(`SpecialFeatureCount ${movie.SpecialFeatureCount}`);
-    movie.LocalTrailerCount && console.log(`LocalTrailerCount ${movie.LocalTrailerCount}`);
+    return result;
   }
 
   async fetchEpisode(episode:Item) {
     const dirpath = path.join(this.dest, ...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(this.ItemPath, this)));
+    const result = [];
     for (const media of episode.MediaSources!) {
       if (media.Type === "Default") {
-        await this.fetchMedia(episode, dirpath, media);
-      } else {
-        console.log(`Skipping ${media.Type} media ${media.Id} on ${episode.Id}`);
+        result.push(...await this.fetchMedia(episode, dirpath, media));
       }
     }
+    return result;
   }
 
   async fetchSeason(season:Item) {
-    const seasonnfo = path.join(this.dest, ...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
-    console.log(`Season Metadata ${seasonnfo}`);
-    if (!this.list) {
-      await writeFile(seasonnfo, makeNfo(season));
-    }
+    const result = [];
 
-    if (!this.shallow && !this.nfo) {
+    const seasonnfo = path.join(this.dest, ...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
+    result.push(new FetchTask(seasonnfo, makeNfo(season)));
+
+    if (!this.shallow) {
       const episodes = await this.jserver.getEpisodes(season.SeriesId!, season.Id);
       for (const episode of episodes.Items) {
         this.seenItems.set(episode.Id, episode);
-        await this.fetchEpisode(episode);
+        result.push(...await this.fetchEpisode(episode));
       }
     }
+    return result;
   }
 
   async fetchSeries(series:Item) {
+    const result = [];
+
     const seriesnfo = path.join(this.dest, await this.ItemPath(series), "tvshow.nfo");
-    console.log(`Series Metadata ${seriesnfo}`);
-    if (!this.list) {
-      await writeFile(seriesnfo, makeNfo(series));
-    }
+    result.push(new FetchTask(seriesnfo, makeNfo(series)));
 
     if (!this.shallow) {
       const seasons = await this.jserver.getSeasons(series.Id);
       for (const season of seasons.Items) {
         this.seenItems.set(season.Id, season);
-        await this.fetchSeason(season);
+        result.push(...await this.fetchSeason(season));
       }
     }
+    return result;
   }
 
 }
