@@ -72,20 +72,31 @@ const bars = new MultiBar({
     }
   },
   autopadding: true,
+  forceRedraw: true,
 });
 
+function toHHMMSS(totalseconds:number) {
+  const hours   = Math.floor(totalseconds / 3600);
+  const minutes = Math.floor(totalseconds / 60) % 60;
+  const seconds = totalseconds % 60;
+
+  return [hours, minutes, seconds]
+    .map(v=>v < 10 ? "0" + v : v)
+    .filter((v, i)=>v !== "00" || i > 0)
+    .join(":");
+}
 
 async function writeFile(filepath:string, data:string|Promise<NodeJS.ReadableStream>) {
   const filename = path.basename(filepath);
   await fsp.mkdir(path.dirname(filepath), {recursive: true});
   if (typeof data === 'string') {
-    bars.log(`${filesize(data.length).padStart(10)} ${filename}\n`);
+    bars.log(`${filesize(data.length).padStart(10)}  ${''.padStart(10)}  ${filename}\n`);
     return fsp.writeFile(filepath, data);
   } else {
     const ps = progress_stream();
     await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
     const progress = ps.progress();
-    bars.log(`${filesize(progress.transferred).padStart(10)} ${filename}\n`);
+    bars.log(`${filesize(progress.transferred).padStart(10)}  ${toHHMMSS(progress.runtime).padStart(10)}  ${filename}\n`);
   }
   
 }
@@ -95,7 +106,7 @@ async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.Rea
   const filename = path.basename(filepath);
   const bar = bars.create(size, 0, {speed: "", filename: filename});
   const ps = progress_stream( 
-    {length: size, time: 200 },
+    { time: 200 },
     progress=>bar && bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
   );
   await dir;
@@ -103,7 +114,7 @@ async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.Rea
   const progress = ps.progress();
   bar.stop();
   bars.remove(bar);
-  bars.log(`${filesize(progress.transferred).padStart(10)} ${filename}\n`);
+  bars.log(`${filesize(progress.transferred).padStart(10)}  ${toHHMMSS(progress.runtime).padStart(10)}  ${filename}\n`);
 }
 
 interface ProgramOptions {
