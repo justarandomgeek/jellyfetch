@@ -10,19 +10,15 @@ const patterns = {
   StripChars: /[:*<>\"?|\\\/]/g,
 };
 
-
-
-
 export class JFetch {
   constructor(
-    readonly jserver:Jellyfin,
-    readonly dest:string
+    private readonly jserver:Jellyfin,
+    private readonly dest:string
   ) {}
 
-  readonly seenItems = new Map<string, Item>();
+  private readonly seenItems = new Map<string, Item>();
 
-  
-  async fetchItemInfo(id:string) {
+  public async fetchItemInfo(id:string) {
     let item = this.seenItems.get(id);
     if (!item) {
       item = await this.jserver.getItem(id);
@@ -31,7 +27,7 @@ export class JFetch {
     return item;
   }
 
-  async ItemPath(itemSpec:Item|string) {
+  private async ItemPath(itemSpec:Item|string) {
     const item =  (typeof itemSpec === 'string') ? await this.fetchItemInfo(itemSpec) : itemSpec;
     let pattern:string;
     switch (item.Type) {
@@ -61,7 +57,7 @@ export class JFetch {
     });
   }
 
-  async fetchItem(itemSpec:Item|string, shallow?:boolean): Promise<FetchTask[]> {
+  public async fetchItem(itemSpec:Item|string, shallow?:boolean): Promise<FetchTask[]> {
     const item =  (typeof itemSpec === 'string') ? await this.fetchItemInfo(itemSpec) : itemSpec;
     switch (item.Type) {
       case "Series":
@@ -83,7 +79,7 @@ export class JFetch {
   }
 
   
-  async fetchCollection(item:Item, shallow?:boolean) {
+  private async fetchCollection(item:Item, shallow?:boolean) {
     const children = await this.jserver.getItemChildren(item.Id);
     const result = [];
     for (const child of children.Items) {
@@ -92,12 +88,10 @@ export class JFetch {
     return result;
   }
 
-  async fetchMedia(item:Item, dirpath:string, media:MediaSource) {
-    const result = [];
-
+  private fetchMedia(item:Item, dirpath:string, media:MediaSource) {
     if (!media.Name) {
       console.log(`No name for media ${media.Id!} on Item ${item.Id}`);
-      return [];
+      return;
     }
     const medianame = media.Name.replace(patterns.StripChars, '');
     const vidpath = path.join(dirpath, `${medianame}.${media.Container}`);
@@ -105,8 +99,6 @@ export class JFetch {
     const nfopath = path.join(dirpath, `${medianame}.nfo`);
     const nfo = new FetchTask(nfopath, makeNfo(item));
     const aux:FetchTask[] = [];
-    result.push(new FetchTask(vidpath, ()=>this.jserver.getFile(media.Id!), media.Size!, nfo, aux));
-    
     for (const stream of media.MediaStreams!) {
       if (stream.IsExternal) {
         let streampath = path.join(dirpath, medianame);
@@ -132,31 +124,32 @@ export class JFetch {
         }
       }
     }
-
-    return result;
+    return new FetchTask(vidpath, ()=>this.jserver.getFile(media.Id!), media.Size!, nfo, aux);
   }
 
-  async fetchMovie(movie:Item) {
+  private async fetchMovie(movie:Item) {
     const dirpath = path.join(this.dest, await this.ItemPath(movie));
     const result = [];
     for (const media of movie.MediaSources!) {
-      result.push(...await this.fetchMedia(movie, dirpath, media));
+      const m = this.fetchMedia(movie, dirpath, media);
+      m && result.push(m);
     }
     return result;
   }
 
-  async fetchEpisode(episode:Item) {
+  private async fetchEpisode(episode:Item) {
     const dirpath = path.join(this.dest, ...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(this.ItemPath, this)));
     const result = [];
     for (const media of episode.MediaSources!) {
       if (media.Type === "Default") {
-        result.push(...await this.fetchMedia(episode, dirpath, media));
+        const m = this.fetchMedia(episode, dirpath, media);
+        m && result.push(m);
       }
     }
     return result;
   }
 
-  async fetchSeason(season:Item, shallow?:boolean) {
+  private async fetchSeason(season:Item, shallow?:boolean) {
     const result = [];
 
     const seasonnfo = path.join(this.dest, ...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
@@ -172,7 +165,7 @@ export class JFetch {
     return result;
   }
 
-  async fetchSeries(series:Item, shallow?:boolean) {
+  private async fetchSeries(series:Item, shallow?:boolean) {
     const result = [];
 
     const seriesnfo = path.join(this.dest, await this.ItemPath(series), "tvshow.nfo");
