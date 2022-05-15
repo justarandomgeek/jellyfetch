@@ -1,6 +1,5 @@
 import { Item } from './jellyfin.js';
 import * as xmlbuilder2 from 'xmlbuilder2';
-import { XMLBuilder } from 'xmlbuilder2/lib/interfaces';
 
 function rootNfoElemName(itemType: string) {
   switch (itemType) {
