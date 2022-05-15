@@ -1,6 +1,7 @@
 import { Item, Jellyfin, MediaSource } from "./jellyfin";
 import { makeNfo } from './nfowriter.js';
 import { posix as path } from 'path';
+import { FetchTask } from "./index.js";
 
 const patterns = {
   Movie: "{Name} ({ProductionYear})",
@@ -11,27 +12,11 @@ const patterns = {
 
 
 
-export class FetchTask {
-  constructor(
-    readonly destpath:string,
-    readonly datareq:string|(()=>Promise<NodeJS.ReadableStream>),
-    readonly size?:number,
-    readonly meta?:FetchTask,
-    readonly aux?:FetchTask[]
-  ) {}
-
-  public get totalsize():number {
-    const meta = this.meta?.totalsize ?? 0;
-    const aux = this.aux?.map(f=>f.totalsize??0).reduce((a, b)=>a+b, 0) ?? 0;
-    return (this.size??0) + meta + aux;
-  }
-}
 
 export class JFetch {
   constructor(
     readonly jserver:Jellyfin,
-    readonly dest:string,
-    readonly shallow?:boolean
+    readonly dest:string
   ) {}
 
   readonly seenItems = new Map<string, Item>();
@@ -76,13 +61,13 @@ export class JFetch {
     });
   }
 
-  async fetchItem(itemSpec:Item|string): Promise<FetchTask[]> {
+  async fetchItem(itemSpec:Item|string, shallow?:boolean): Promise<FetchTask[]> {
     const item =  (typeof itemSpec === 'string') ? await this.fetchItemInfo(itemSpec) : itemSpec;
     switch (item.Type) {
       case "Series":
-        return this.fetchSeries(item);
+        return this.fetchSeries(item, shallow);
       case "Season":
-        return this.fetchSeason(item);
+        return this.fetchSeason(item, shallow);
       case "Episode":
         return this.fetchEpisode(item);
       case "Movie":
@@ -90,7 +75,7 @@ export class JFetch {
       case "BoxSet":
       case "Playlist":
       case "CollectionFolder":
-        return this.fetchCollection(item);
+        return this.fetchCollection(item, shallow);
       default:
         console.log(`Downloading ${item.Type} Items not yet supported`);
         return [];
@@ -98,11 +83,11 @@ export class JFetch {
   }
 
   
-  async fetchCollection(item:Item) {
+  async fetchCollection(item:Item, shallow?:boolean) {
     const children = await this.jserver.getItemChildren(item.Id);
     const result = [];
     for (const child of children.Items) {
-      result.push(...await this.fetchItem(child));
+      result.push(...await this.fetchItem(child, shallow));
     }
     return result;
   }
@@ -171,13 +156,13 @@ export class JFetch {
     return result;
   }
 
-  async fetchSeason(season:Item) {
+  async fetchSeason(season:Item, shallow?:boolean) {
     const result = [];
 
     const seasonnfo = path.join(this.dest, ...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
     result.push(new FetchTask(seasonnfo, makeNfo(season)));
 
-    if (!this.shallow) {
+    if (!shallow) {
       const episodes = await this.jserver.getEpisodes(season.SeriesId!, season.Id);
       for (const episode of episodes.Items) {
         this.seenItems.set(episode.Id, episode);
@@ -187,13 +172,13 @@ export class JFetch {
     return result;
   }
 
-  async fetchSeries(series:Item) {
+  async fetchSeries(series:Item, shallow?:boolean) {
     const result = [];
 
     const seriesnfo = path.join(this.dest, await this.ItemPath(series), "tvshow.nfo");
     result.push(new FetchTask(seriesnfo, makeNfo(series)));
 
-    if (!this.shallow) {
+    if (!shallow) {
       const seasons = await this.jserver.getSeasons(series.Id);
       for (const season of seasons.Items) {
         this.seenItems.set(season.Id, season);

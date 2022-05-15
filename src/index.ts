@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Jellyfin } from './jellyfin.js';
-import { FetchTask, JFetch } from './jfetch.js';
+import { JFetch } from './jfetch.js';
 
 import { program } from 'commander';
 import inquirer from "inquirer";
@@ -23,7 +23,7 @@ interface ServerInfo {
   accessToken?:string
 };
 
-async function getAuthedJellyfinApi(server:string, dest:string, shallow?:boolean) {
+async function getAuthedJellyfinApi(server:string, dest:string) {
   let servers:ServerInfo[];
   try {
     servers = JSON.parse(await fsp.readFile("servers.json", "utf8"));
@@ -55,7 +55,7 @@ async function getAuthedJellyfinApi(server:string, dest:string, shallow?:boolean
   }
   si.accessToken = jserver.AccessToken;
   await fsp.writeFile("servers.json", JSON.stringify(servers));
-  return new JFetch(jserver, dest, shallow);
+  return new JFetch(jserver, dest);
 }
 
 
@@ -77,8 +77,7 @@ const bars = new MultiBar({
 
 async function writeFile(filepath:string, data:string|Promise<NodeJS.ReadableStream>) {
   await fsp.mkdir(path.dirname(filepath), {recursive: true});
-  const d = await data;
-  return fsp.writeFile(filepath, d);
+  return fsp.writeFile(filepath, await data);
 }
 
 async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.ReadableStream>, size:number) {
@@ -100,37 +99,69 @@ async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.Rea
 interface ProgramOptions {
   dest:string
   list:boolean
-  nfo:boolean
   shallow:boolean
 }
 
-function DoFetchTaskInternal(task:FetchTask) {
-  const data = typeof task.datareq === 'string' ? task.datareq : task.datareq();
-  const fetching = [task.size ? 
-    writeFileProgress(task.destpath, data, task.size) :
-    writeFile(task.destpath, data)];
+export class FetchTask {
+  constructor(
+    readonly destpath:string,
+    readonly datareq:string|(()=>Promise<NodeJS.ReadableStream>),
+    readonly size?:number,
+    private readonly meta?:FetchTask,
+    private readonly aux?:FetchTask[]
+  ) {}
 
-  task.meta && fetching.push(...DoFetchTaskInternal(task.meta));
-  task.aux && fetching.push(...task.aux.flatMap(DoFetchTaskInternal));
-  return fetching;
-}
+  private skip?: boolean;
 
-async function DoFetchTask(task:FetchTask) {
-  return Promise.all(DoFetchTaskInternal(task));
-}
+  public get totalsize():number {
+    const meta = this.meta?.totalsize ?? 0;
+    const aux = this.aux?.map(f=>f.totalsize??0).reduce((a, b)=>a+b, 0) ?? 0;
+    return (this.skip?0:(this.size??0)) + meta + aux;
+  }
 
-function* ListFetchTask(task:FetchTask):Generator<{destpath:string; size?:number}> {
-  if (task.meta) { yield* ListFetchTask(task.meta); }
+  
+  private *ExecuteInternal():Generator<Promise<void>> {
+    const data = typeof this.datareq === 'string' ? this.datareq : this.datareq();
+    yield this.size ? 
+      writeFileProgress(this.destpath, data, this.size) :
+      writeFile(this.destpath, data);
 
-  yield {destpath: task.destpath, size: task.size};
+    if (this.meta) { yield* this.meta.ExecuteInternal(); };
+    if (this.aux) { 
+      for (const aux of this.aux) {
+        yield* aux.ExecuteInternal();
+      }
+    }
+  }
 
-  if (task.aux) { 
-    for (const aux of task.aux) {
-      yield* ListFetchTask(aux); 
+  public async Execute() {
+    return this.skip || Promise.all(this.ExecuteInternal());
+  }
+
+  public *List():Generator<{destpath:string; size?:number}> {
+    if (this.meta) { yield* this.meta.List(); }
+
+    if (!this.skip) { yield {destpath: this.destpath, size: this.size}; }
+
+    if (this.aux) { 
+      for (const aux of this.aux) {
+        yield* aux.List(); 
+      }
+    }
+  }
+
+  public Skip(list:string[]) {
+    if (list.includes(this.destpath)) {
+      this.skip = true;
+    }
+    if (this.meta) { this.meta.Skip(list); }
+    if (this.aux) {
+      for (const aux of this.aux) {
+        aux.Skip(list);
+      }
     }
   }
 }
-
 
 program
   .version('0.0.1')
@@ -139,38 +170,49 @@ program
   .argument("<id>", "ItemID to fetch.")
   .option("-d, --dest <destination>", "Destination folder", ".")
   .option("-l, --list", "List files that would be downloaded.")
-  .option("-n, --nfo", "Only make directories and Series/Season .nfo files.")
   .option("-s, --shallow", "When fetching Series or Season items, fetch only the specified item, not children.")
   .action(async (server:string, id:string)=>{
-    const {list, nfo, shallow, dest} = program.opts<ProgramOptions>();
-    const jfetch = await getAuthedJellyfinApi(server, dest, shallow);
+    const {list, shallow, dest} = program.opts<ProgramOptions>();
+    const jfetch = await getAuthedJellyfinApi(server, dest);
 
     const item = await jfetch.fetchItemInfo(id);
-    const tasks = await jfetch.fetchItem(item);
-    console.log(`${tasks.length} items ${filesize(tasks.map(t=>t.totalsize).reduce((a, b)=>a+b))}`);
+    const tasks = await jfetch.fetchItem(item, shallow);
+    const pstats = [];
+    for (const task of tasks) {
+      for (const item of task.List()) {
+        pstats.push(fsp.stat(item.destpath).then(s=>({destpath: item.destpath, stat: s})));
+      }
+    }
+
+    const stats = <{destpath:string; stat:fs.Stats}[]> (await Promise.allSettled(pstats))
+      .map(s=>s.status==='fulfilled' && s.value)
+      .filter(s=>!!s);
+    if (stats.length > 0) {
+      const overwrite = (await inquirer.prompt({
+        message: "Overwrite existing files?",
+        name: "overwrite",
+        type: 'checkbox',
+        choices: stats.map(s=>({
+          name: `${s.destpath} ${filesize(s.stat.size)} ${s.stat.mtime}`,
+          value: s.destpath,
+        })),
+      })).overwrite;
+      const skip = stats.map(s=>s.destpath).filter(s=>!overwrite.includes(s));
+      tasks.map(t=>t.Skip(skip));
+    }
+    
     if (list) {
-      const pstats = [];
       for (const task of tasks) {
-        for (const item of ListFetchTask(task)) {
+        for (const item of task.List()) {
           console.log(`${item.destpath} ${item.size?filesize(item.size):''}`);
-          pstats.push(fsp.stat(item.destpath));
         }
       }
-
-      const stats = (await Promise.allSettled(pstats))
-        .filter(s=>s.status==='fulfilled')
-        .map(s=>(s as PromiseFulfilledResult<fs.Stats>).value)
-        .map(s=>s.size)
-        ;
-      
-
-      
-      
-      if (!(await inquirer.prompt([{
+      console.log(filesize(tasks.map(t=>t.totalsize).reduce((a, b)=>a+b)));
+      if (!(await inquirer.prompt({
         message: "Proceed?",
         name: "proceed",
         type: "confirm",
-      }])).proceed) {
+      })).proceed) {
         return;
       }
     }
@@ -189,7 +231,7 @@ program
     });
     const q = async.queue<FetchTask>(async(task)=>{
       tbar.update(tasks.length - q.length());
-      return DoFetchTask(task);
+      return task.Execute();
     }, 1);
     q.push(tasks);
     await q.drain();
