@@ -1,6 +1,2 @@
-non-admin can't read physicalpaths roots
-  so need metadata-ish-based path generation
 more complete nfo files?
-prompt before overwriting existing files?
-enumerate all files and prompt before downloading?
 
