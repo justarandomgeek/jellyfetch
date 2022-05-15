@@ -76,8 +76,18 @@ const bars = new MultiBar({
 
 
 async function writeFile(filepath:string, data:string|Promise<NodeJS.ReadableStream>) {
+  const filename = path.basename(filepath);
   await fsp.mkdir(path.dirname(filepath), {recursive: true});
-  return fsp.writeFile(filepath, await data);
+  if (typeof data === 'string') {
+    bars.log(`${filesize(data.length).padStart(10)} ${filename}\n`);
+    return fsp.writeFile(filepath, data);
+  } else {
+    const ps = progress_stream();
+    await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
+    const progress = ps.progress();
+    bars.log(`${filesize(progress.transferred).padStart(10)} ${filename}\n`);
+  }
+  
 }
 
 async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.ReadableStream>, size:number) {
@@ -86,7 +96,7 @@ async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.Rea
   const bar = bars.create(size, 0, {speed: "", filename: filename});
   const ps = progress_stream( 
     {length: size, time: 200 },
-    progress=>bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
+    progress=>bar && bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
   );
   await dir;
   await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
@@ -121,10 +131,12 @@ export class FetchTask {
 
   
   private *ExecuteInternal():Generator<Promise<void>> {
-    const data = typeof this.datareq === 'string' ? this.datareq : this.datareq();
-    yield this.size ? 
-      writeFileProgress(this.destpath, data, this.size) :
-      writeFile(this.destpath, data);
+    if (!this.skip) {
+      const data = typeof this.datareq === 'string' ? this.datareq : this.datareq();
+      yield this.size ? 
+        writeFileProgress(this.destpath, data, this.size) :
+        writeFile(this.destpath, data);
+    }
 
     if (this.meta) { yield* this.meta.ExecuteInternal(); };
     if (this.aux) { 
@@ -135,7 +147,7 @@ export class FetchTask {
   }
 
   public async Execute() {
-    return this.skip || Promise.all(this.ExecuteInternal());
+    return Promise.all(this.ExecuteInternal());
   }
 
   public *List():Generator<{destpath:string; size?:number}> {
@@ -176,17 +188,20 @@ program
     const jfetch = await getAuthedJellyfinApi(server, dest);
 
     const item = await jfetch.fetchItemInfo(id);
-    const tasks = await jfetch.fetchItem(item, shallow);
+    const tasks = [];
+    for await (const task of jfetch.fetchItem(item, shallow)) { tasks.push(task); }
     const pstats = [];
     for (const task of tasks) {
       for (const item of task.List()) {
-        pstats.push(fsp.stat(item.destpath).then(s=>({destpath: item.destpath, stat: s})));
+        pstats.push(
+          fsp.stat(item.destpath)
+            .then(s=>({destpath: item.destpath, stat: s}))
+            .catch(()=>undefined)
+        );
       }
     }
-
-    const stats = <{destpath:string; stat:fs.Stats}[]> (await Promise.allSettled(pstats))
-      .map(s=>s.status==='fulfilled' && s.value)
-      .filter(s=>!!s);
+    
+    const stats = <{destpath:string; stat:fs.Stats}[]> (await Promise.all(pstats)).filter(s=>!!s);
     if (stats.length > 0) {
       const overwrite = (await inquirer.prompt({
         message: "Overwrite existing files?",
@@ -201,22 +216,27 @@ program
       tasks.map(t=>t.Skip(skip));
     }
     
-    if (list) {
-      for (const task of tasks) {
+    let totalsize = 0;
+    let count = 0;
+    for (const task of tasks) {
+      totalsize += task.totalsize;
+      count++;
+      if (list) {
         for (const item of task.List()) {
           console.log(`${item.destpath} ${item.size?filesize(item.size):''}`);
         }
       }
-      console.log(filesize(tasks.map(t=>t.totalsize).reduce((a, b)=>a+b)));
-      if (!(await inquirer.prompt({
-        message: "Proceed?",
-        name: "proceed",
-        type: "confirm",
-      })).proceed) {
-        return;
-      }
     }
-    const tbar = bars.create(tasks.length, 0, {}, {
+    console.log(filesize(totalsize));
+    if (!(await inquirer.prompt({
+      message: "Proceed?",
+      name: "proceed",
+      type: "confirm",
+    })).proceed) {
+      return;
+    }
+  
+    const tbar = bars.create(count, 0, {}, {
       format: '[{bar}] | {percentage}% | {value}    / {total}    |',
       formatValue: function(v, options, type) {
         switch (type) {
@@ -230,11 +250,11 @@ program
       autopadding: true,
     });
     const q = async.queue<FetchTask>(async(task)=>{
-      tbar.update(tasks.length - q.length());
+      tbar.update(count - q.length());
       return task.Execute();
     }, 1);
     q.push(tasks);
     await q.drain();
-
+    bars.stop();
   })
   .parseAsync();

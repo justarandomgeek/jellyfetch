@@ -57,35 +57,38 @@ export class JFetch {
     });
   }
 
-  public async fetchItem(itemSpec:Item|string, shallow?:boolean): Promise<FetchTask[]> {
+  public async *fetchItem(itemSpec:Item|string, shallow?:boolean): AsyncGenerator<FetchTask> {
     const item =  (typeof itemSpec === 'string') ? await this.fetchItemInfo(itemSpec) : itemSpec;
     switch (item.Type) {
       case "Series":
-        return this.fetchSeries(item, shallow);
+        yield *this.fetchSeries(item, shallow);
+        break;
       case "Season":
-        return this.fetchSeason(item, shallow);
+        yield *this.fetchSeason(item, shallow);
+        break;
       case "Episode":
-        return this.fetchEpisode(item);
+        yield *this.fetchEpisode(item);
+        break;
       case "Movie":
-        return this.fetchMovie(item);
+        yield *this.fetchMovie(item);
+        break;
       case "BoxSet":
       case "Playlist":
       case "CollectionFolder":
-        return this.fetchCollection(item, shallow);
+        yield *this.fetchCollection(item, shallow);
+        break;
       default:
         console.log(`Downloading ${item.Type} Items not yet supported`);
-        return [];
+        break;
     }
   }
 
   
-  private async fetchCollection(item:Item, shallow?:boolean) {
+  private async *fetchCollection(item:Item, shallow?:boolean) {
     const children = await this.jserver.getItemChildren(item.Id);
-    const result = [];
     for (const child of children.Items) {
-      result.push(...await this.fetchItem(child, shallow));
+      yield* this.fetchItem(child, shallow);
     }
-    return result;
   }
 
   private fetchMedia(item:Item, dirpath:string, media:MediaSource) {
@@ -127,58 +130,48 @@ export class JFetch {
     return new FetchTask(vidpath, ()=>this.jserver.getFile(media.Id!), media.Size!, nfo, aux);
   }
 
-  private async fetchMovie(movie:Item) {
+  private async *fetchMovie(movie:Item) {
     const dirpath = path.join(this.dest, await this.ItemPath(movie));
-    const result = [];
     for (const media of movie.MediaSources!) {
       const m = this.fetchMedia(movie, dirpath, media);
-      m && result.push(m);
+      if (m) { yield m; }
     }
-    return result;
   }
 
-  private async fetchEpisode(episode:Item) {
+  private async *fetchEpisode(episode:Item) {
     const dirpath = path.join(this.dest, ...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(this.ItemPath, this)));
-    const result = [];
     for (const media of episode.MediaSources!) {
       if (media.Type === "Default") {
         const m = this.fetchMedia(episode, dirpath, media);
-        m && result.push(m);
+        if (m) { yield m; }
       }
     }
-    return result;
   }
 
-  private async fetchSeason(season:Item, shallow?:boolean) {
-    const result = [];
-
+  private async *fetchSeason(season:Item, shallow?:boolean) {
     const seasonnfo = path.join(this.dest, ...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
-    result.push(new FetchTask(seasonnfo, makeNfo(season)));
+    yield new FetchTask(seasonnfo, makeNfo(season));
 
     if (!shallow) {
       const episodes = await this.jserver.getEpisodes(season.SeriesId!, season.Id);
       for (const episode of episodes.Items) {
         this.seenItems.set(episode.Id, episode);
-        result.push(...await this.fetchEpisode(episode));
+        yield* this.fetchEpisode(episode);
       }
     }
-    return result;
   }
 
-  private async fetchSeries(series:Item, shallow?:boolean) {
-    const result = [];
-
+  private async *fetchSeries(series:Item, shallow?:boolean) {
     const seriesnfo = path.join(this.dest, await this.ItemPath(series), "tvshow.nfo");
-    result.push(new FetchTask(seriesnfo, makeNfo(series)));
+    yield new FetchTask(seriesnfo, makeNfo(series));
 
     if (!shallow) {
       const seasons = await this.jserver.getSeasons(series.Id);
       for (const season of seasons.Items) {
         this.seenItems.set(season.Id, season);
-        result.push(...await this.fetchSeason(season));
+        yield* this.fetchSeason(season);
       }
     }
-    return result;
   }
 
 }
