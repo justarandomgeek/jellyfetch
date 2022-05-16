@@ -13,7 +13,6 @@ const patterns = {
 export class JFetch {
   constructor(
     private readonly jserver:Jellyfin,
-    private readonly dest:string
   ) {}
 
   private readonly seenItems = new Map<string, Item>();
@@ -131,7 +130,7 @@ export class JFetch {
   }
 
   private async *fetchMovie(movie:Item) {
-    const dirpath = path.join(this.dest, await this.ItemPath(movie));
+    const dirpath = path.join(await this.ItemPath(movie));
     for (const media of movie.MediaSources!) {
       const m = this.fetchMedia(movie, dirpath, media);
       if (m) { yield m; }
@@ -139,7 +138,7 @@ export class JFetch {
   }
 
   private async *fetchEpisode(episode:Item) {
-    const dirpath = path.join(this.dest, ...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(this.ItemPath, this)));
+    const dirpath = path.join(...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(this.ItemPath, this)));
     for (const media of episode.MediaSources!) {
       if (media.Type === "Default") {
         const m = this.fetchMedia(episode, dirpath, media);
@@ -149,7 +148,7 @@ export class JFetch {
   }
 
   private async *fetchSeason(season:Item, shallow?:boolean) {
-    const seasonnfo = path.join(this.dest, ...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
+    const seasonnfo = path.join(...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
     yield new FetchTask(seasonnfo, makeNfo(season));
 
     if (!shallow) {
@@ -162,7 +161,7 @@ export class JFetch {
   }
 
   private async *fetchSeries(series:Item, shallow?:boolean) {
-    const seriesnfo = path.join(this.dest, await this.ItemPath(series), "tvshow.nfo");
+    const seriesnfo = path.join(await this.ItemPath(series), "tvshow.nfo");
     yield new FetchTask(seriesnfo, makeNfo(series));
 
     if (!shallow) {

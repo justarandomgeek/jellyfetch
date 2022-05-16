@@ -23,7 +23,7 @@ interface ServerInfo {
   accessToken?:string
 };
 
-async function getAuthedJellyfinApi(server:string, dest:string) {
+async function getAuthedJellyfinApi(server:string) {
   let servers:ServerInfo[];
   try {
     servers = JSON.parse(await fsp.readFile("servers.json", "utf8"));
@@ -55,7 +55,7 @@ async function getAuthedJellyfinApi(server:string, dest:string) {
   }
   si.accessToken = jserver.AccessToken;
   await fsp.writeFile("servers.json", JSON.stringify(servers));
-  return new JFetch(jserver, dest);
+  return new JFetch(jserver);
 }
 
 
@@ -86,25 +86,11 @@ function toHHMMSS(totalseconds:number) {
     .join(":");
 }
 
-async function writeFile(filepath:string, data:string|Promise<NodeJS.ReadableStream>) {
-  const filename = path.basename(filepath);
-  await fsp.mkdir(path.dirname(filepath), {recursive: true});
-  if (typeof data === 'string') {
-    bars.log(`${filesize(data.length).padStart(10)}  ${''.padStart(10)}  ${filename}\n`);
-    return fsp.writeFile(filepath, data);
-  } else {
-    const ps = progress_stream();
-    await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
-    const progress = ps.progress();
-    bars.log(`${filesize(progress.transferred).padStart(10)}  ${toHHMMSS(progress.runtime).padStart(10)}  ${filename}\n`);
-  }
-  
-}
-
-async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.ReadableStream>, size:number) {
+async function writeFileProgress(dest:string, file:string, data:string|Promise<NodeJS.ReadableStream>, size?:number) {
+  const filepath = path.join(dest, file);
+  const filename = path.basename(file);
   const dir = fsp.mkdir(path.dirname(filepath), {recursive: true});
-  const filename = path.basename(filepath);
-  const bar = bars.create(size, 0, {speed: "", filename: filename});
+  const bar = size !== undefined && bars.create(size, 0, {speed: "", filename: filename});
   const ps = progress_stream( 
     { time: 200 },
     progress=>bar && bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
@@ -112,9 +98,11 @@ async function writeFileProgress(filepath:string, data:string|Promise<NodeJS.Rea
   await dir;
   await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
   const progress = ps.progress();
-  bar.stop();
-  bars.remove(bar);
-  bars.log(`${filesize(progress.transferred).padStart(10)}  ${toHHMMSS(progress.runtime).padStart(10)}  ${filename}\n`);
+  if (bar) {
+    bar.stop();
+    bars.remove(bar);
+  }
+  bars.log(`${filesize(progress.transferred).padStart(10)} ${toHHMMSS(progress.runtime).padStart(8)}  ${file}\n`);
 }
 
 interface ProgramOptions {
@@ -141,24 +129,22 @@ export class FetchTask {
   }
 
   
-  private *ExecuteInternal():Generator<Promise<void>> {
+  private *ExecuteInternal(dest:string):Generator<Promise<void>> {
     if (!this.skip) {
       const data = typeof this.datareq === 'string' ? this.datareq : this.datareq();
-      yield this.size ? 
-        writeFileProgress(this.destpath, data, this.size) :
-        writeFile(this.destpath, data);
+      yield writeFileProgress(dest, this.destpath, data, this.size);
     }
 
-    if (this.meta) { yield* this.meta.ExecuteInternal(); };
+    if (this.meta) { yield* this.meta.ExecuteInternal(dest); };
     if (this.aux) { 
       for (const aux of this.aux) {
-        yield* aux.ExecuteInternal();
+        yield* aux.ExecuteInternal(dest);
       }
     }
   }
 
-  public async Execute() {
-    return Promise.all(this.ExecuteInternal());
+  public async Execute(dest:string) {
+    return Promise.all(this.ExecuteInternal(dest));
   }
 
   public *List():Generator<{destpath:string; size?:number}> {
@@ -196,7 +182,7 @@ program
   .option("-s, --shallow", "When fetching Series or Season items, fetch only the specified item, not children.")
   .action(async (server:string, id:string)=>{
     const {list, shallow, dest} = program.opts<ProgramOptions>();
-    const jfetch = await getAuthedJellyfinApi(server, dest);
+    const jfetch = await getAuthedJellyfinApi(server);
 
     const item = await jfetch.fetchItemInfo(id);
     const tasks = [];
@@ -205,7 +191,7 @@ program
     for (const task of tasks) {
       for (const item of task.List()) {
         pstats.push(
-          fsp.stat(item.destpath)
+          fsp.stat(path.join(dest, item.destpath))
             .then(s=>({destpath: item.destpath, stat: s}))
             .catch(()=>undefined)
         );
@@ -262,7 +248,7 @@ program
     });
     const q = async.queue<FetchTask>(async(task)=>{
       tbar.update(count - q.length());
-      return task.Execute();
+      return task.Execute(dest);
     }, 1);
     q.push(tasks);
     await q.drain();
