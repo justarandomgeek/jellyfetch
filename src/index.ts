@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Jellyfin } from './jellyfin.js';
+import { Item, Jellyfin } from './jellyfin.js';
 import { JFetch } from './jfetch.js';
 
 import { program } from 'commander';
@@ -17,6 +17,7 @@ const pipelineAsync = promisify(pipeline);
 import progress_stream from "progress-stream";
 import cliprog, { MultiBar } from "cli-progress";
 import * as async from 'async';
+import { makeNfo } from './nfowriter.js';
 
 interface ServerInfo {
   baseUrl:string
@@ -90,7 +91,8 @@ async function writeFileProgress(dest:string, file:string, data:string|Promise<N
   const filepath = path.join(dest, file);
   const filename = path.basename(file);
   const dir = fsp.mkdir(path.dirname(filepath), {recursive: true});
-  const bar = size !== undefined && bars.create(size, 0, {speed: "", filename: filename});
+  const bar = size && size > (1024*1024) && typeof data !== "string" &&
+    bars.create(size, 0, {speed: "", filename: filename});
   const ps = progress_stream( 
     { time: 200 },
     progress=>bar && bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
@@ -105,72 +107,86 @@ async function writeFileProgress(dest:string, file:string, data:string|Promise<N
   bars.log(`${filesize(progress.transferred).padStart(10)} ${toHHMMSS(progress.runtime).padStart(8)}  ${file}\n`);
 }
 
-interface ProgramOptions {
+type FetchType = "nfo"|"media"|"image"|"external";
+export abstract class FetchTask {
+  abstract readonly type:FetchType; 
+  constructor (
+    readonly destpath:string,
+  ) {}
+
+  protected abstract get data() : string|Promise<NodeJS.ReadableStream>;
+  public abstract get size() : number|undefined;
+
+  public async Execute(dest:string) {
+    return writeFileProgress(dest, this.destpath, this.data, this.size);
+  }
+}
+
+export class NfoTask extends FetchTask {
+  readonly type = "nfo";
+
+  constructor(
+    readonly destpath:string,
+    readonly item:Item,
+  ) {
+    super(destpath);
+  }
+
+  private _data?:string;
+  private makeData() {
+    if (!this._data) {
+      this._data = makeNfo(this.item);
+    }
+  }
+
+  protected get data() {
+    this.makeData();
+    return this._data!;
+  }
+  public get size() {
+    this.makeData();
+    return this._data!.length;
+  }
+}
+
+export abstract class BaseStreamTask extends FetchTask {
+  constructor(
+    readonly destpath:string,
+    private readonly datareq:()=>Promise<NodeJS.ReadableStream>,
+    private readonly _size?: number,
+  ) {
+    super(destpath);
+  }
+
+  private _data?:Promise<NodeJS.ReadableStream>;
+  protected get data() { 
+    if (!this._data) {
+      this._data = this.datareq();
+    }
+    return this._data; 
+  }
+  public get size() { return this._size; }
+}
+
+export class MediaTask extends BaseStreamTask {
+  readonly type = "media";
+}
+
+export class ImageTask extends BaseStreamTask {
+  readonly type = "image";
+}
+
+export class ExternalStreamTask extends BaseStreamTask {
+  readonly type = "external";
+}
+
+
+
+type ProgramOptions = {
   dest:string
   list:boolean
   shallow:boolean
-}
-
-export class FetchTask {
-  constructor(
-    readonly destpath:string,
-    readonly datareq:string|(()=>Promise<NodeJS.ReadableStream>),
-    readonly size?:number,
-    private readonly meta?:FetchTask,
-    private readonly aux?:FetchTask[]
-  ) {}
-
-  private skip?: boolean;
-
-  public get totalsize():number {
-    const meta = this.meta?.totalsize ?? 0;
-    const aux = this.aux?.map(f=>f.totalsize??0).reduce((a, b)=>a+b, 0) ?? 0;
-    return (this.skip?0:(this.size??0)) + meta + aux;
-  }
-
-  
-  private *ExecuteInternal(dest:string):Generator<Promise<void>> {
-    if (!this.skip) {
-      const data = typeof this.datareq === 'string' ? this.datareq : this.datareq();
-      yield writeFileProgress(dest, this.destpath, data, this.size);
-    }
-
-    if (this.meta) { yield* this.meta.ExecuteInternal(dest); };
-    if (this.aux) { 
-      for (const aux of this.aux) {
-        yield* aux.ExecuteInternal(dest);
-      }
-    }
-  }
-
-  public async Execute(dest:string) {
-    return Promise.all(this.ExecuteInternal(dest));
-  }
-
-  public *List():Generator<{destpath:string; size?:number}> {
-    if (this.meta) { yield* this.meta.List(); }
-
-    if (!this.skip) { yield {destpath: this.destpath, size: this.size}; }
-
-    if (this.aux) { 
-      for (const aux of this.aux) {
-        yield* aux.List(); 
-      }
-    }
-  }
-
-  public Skip(list:string[]) {
-    if (list.includes(this.destpath)) {
-      this.skip = true;
-    }
-    if (this.meta) { this.meta.Skip(list); }
-    if (this.aux) {
-      for (const aux of this.aux) {
-        aux.Skip(list);
-      }
-    }
-  }
-}
+} & {[f in FetchType]:boolean};
 
 program
   .version('0.0.1')
@@ -178,50 +194,56 @@ program
   .argument("<server>", "Base url of the server")
   .argument("<id>", "ItemID to fetch.")
   .option("-d, --dest <destination>", "Destination folder", ".")
-  .option("-l, --list", "List files that would be downloaded.")
+  .option("-l, --list", "List files that will be downloaded.")
   .option("-s, --shallow", "When fetching Series or Season items, fetch only the specified item, not children.")
+  .option("-n, --no-nfo", "Skip Nfo files.")
+  .option("-m, --no-media", "Skip Media files.")
+  .option("-i, --no-image", "Skip Image files.")
+  .option("-x, --no-external", "Skip external media streams (usually subs).")
+
   .action(async (server:string, id:string)=>{
-    const {list, shallow, dest} = program.opts<ProgramOptions>();
+    const opts = program.opts<ProgramOptions>();
     const jfetch = await getAuthedJellyfinApi(server);
 
     const item = await jfetch.fetchItemInfo(id);
-    const tasks = [];
-    for await (const task of jfetch.fetchItem(item, shallow)) { tasks.push(task); }
+    let tasks = [];
+    for await (const task of jfetch.fetchItem(item, opts.shallow)) { tasks.push(task); }
     const pstats = [];
     for (const task of tasks) {
-      for (const item of task.List()) {
-        pstats.push(
-          fsp.stat(path.join(dest, item.destpath))
-            .then(s=>({destpath: item.destpath, stat: s}))
-            .catch(()=>undefined)
-        );
-      }
+      pstats.push(
+        fsp.stat(path.join(opts.dest, task.destpath))
+          .then(s=>({task: task, stat: s}))
+          .catch(()=>undefined)
+      );
     }
     
-    const stats = <{destpath:string; stat:fs.Stats}[]> (await Promise.all(pstats)).filter(s=>!!s);
+    const stats = <{task:FetchTask; stat:fs.Stats}[]> (await Promise.all(pstats)).filter(s=>!!s);
     if (stats.length > 0) {
       const overwrite = (await inquirer.prompt({
         message: "Overwrite existing files?",
         name: "overwrite",
         type: 'checkbox',
-        choices: stats.map(s=>({
-          name: `${s.destpath} ${filesize(s.stat.size)} ${s.stat.mtime}`,
-          value: s.destpath,
-        })),
-      })).overwrite;
-      const skip = stats.map(s=>s.destpath).filter(s=>!overwrite.includes(s));
-      tasks.map(t=>t.Skip(skip));
+        loop: false,
+        choices: stats.map(s=>{
+          const newsize = s.task.size ?
+            `${filesize(s.task.size)} Δ${filesize(s.task.size-s.stat.size)}`:
+            'unknown';
+          return {
+            name: `${s.task.destpath} ${filesize(s.stat.size)} => ${newsize}`,
+            value: s.task,
+            checked: s.task.size && s.stat.size < s.task.size && Math.abs(s.task.size-s.stat.size) > 16,
+          };
+        }),
+      })).overwrite as FetchTask[];
+      const skip = stats.map(s=>s.task).filter(s=>!overwrite.includes(s));
+      tasks = tasks.filter(t=>!skip.includes(t));
     }
     
     let totalsize = 0;
-    let count = 0;
     for (const task of tasks) {
-      totalsize += task.totalsize;
-      count++;
-      if (list) {
-        for (const item of task.List()) {
-          console.log(`${item.destpath} ${item.size?filesize(item.size):''}`);
-        }
+      totalsize += task.size??0;
+      if (opts.list) {
+        console.log(`${task.destpath} ${task.size?filesize(task.size):''}`);
       }
     }
     console.log(filesize(totalsize));
@@ -232,26 +254,47 @@ program
     })).proceed) {
       return;
     }
-  
-    const tbar = bars.create(count, 0, {}, {
-      format: '[{bar}] | {percentage}% | {value}    / {total}    |',
-      formatValue: function(v, options, type) {
-        switch (type) {
-          case 'value':
-          case 'total':
-            return v.toString().padStart(7);
-          default:
-            return cliprog.Format.ValueFormat(v, options, type);
+
+    const grouped_tasks = tasks.reduce(function (r, a) {
+      r[a.type] = r[a.type] || [];
+      r[a.type].push(a);
+      return r;
+    }, <{[k in FetchType]:FetchTask[]}>{} );
+
+    const qs = [];
+    for (const key in grouped_tasks) {
+      if (Object.prototype.hasOwnProperty.call(grouped_tasks, key)) {
+        const type = key as FetchType;
+        const tasks = grouped_tasks[type];
+        if (opts[type] && tasks.length > 0) {
+          const tbar = bars.create(tasks.length, 0, {}, {
+            format: `[{bar}] | {percentage}% | {value}    / {total}    | ${type}`,
+            formatValue: function(v, options, type) {
+              switch (type) {
+                case 'value':
+                case 'total':
+                  return v.toString().padStart(7);
+                default:
+                  return cliprog.Format.ValueFormat(v, options, type);
+              }
+            },
+            autopadding: true,
+          });
+          const q = async.queue<FetchTask>(async(task)=>{
+            await task.Execute(opts.dest);
+            tbar.increment();
+          }, 1);
+          q.push(tasks);
+          q.drain(()=>{
+            tbar.stop();
+            bars.remove(tbar);
+          });
+          qs.push(q);
         }
-      },
-      autopadding: true,
-    });
-    const q = async.queue<FetchTask>(async(task)=>{
-      tbar.update(count - q.length());
-      return task.Execute(dest);
-    }, 1);
-    q.push(tasks);
-    await q.drain();
+      }
+    }
+
+    await Promise.all(qs.map(q=>q.drain()));
     bars.stop();
   })
   .parseAsync();

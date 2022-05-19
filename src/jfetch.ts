@@ -1,7 +1,6 @@
-import { Item, Jellyfin, MediaSource } from "./jellyfin";
-import { makeNfo } from './nfowriter.js';
+import { ImageType, Item, Jellyfin, MediaSource } from "./jellyfin";
 import { posix as path } from 'path';
-import { FetchTask } from "./index.js";
+import { FetchTask, ImageTask, MediaTask, NfoTask, ExternalStreamTask } from "./index.js";
 
 const patterns = {
   Movie: "{Name} ({ProductionYear})",
@@ -90,7 +89,7 @@ export class JFetch {
     }
   }
 
-  private fetchMedia(item:Item, dirpath:string, media:MediaSource) {
+  private async *fetchMedia(item:Item, dirpath:string, media:MediaSource, with_images?:boolean) {
     if (!media.Name) {
       console.log(`No name for media ${media.Id!} on Item ${item.Id}`);
       return;
@@ -99,8 +98,7 @@ export class JFetch {
     const vidpath = path.join(dirpath, `${medianame}.${media.Container}`);
     
     const nfopath = path.join(dirpath, `${medianame}.nfo`);
-    const nfo = new FetchTask(nfopath, makeNfo(item));
-    const aux:FetchTask[] = [];
+    yield new NfoTask(nfopath, item);
     for (const stream of media.MediaStreams!) {
       if (stream.IsExternal) {
         let streampath = path.join(dirpath, medianame);
@@ -113,7 +111,7 @@ export class JFetch {
           case "Subtitle":
             switch (stream.Codec) {
               case "srt":
-                aux.push(new FetchTask(streampath, ()=>this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt")));
+                yield new ExternalStreamTask(streampath, ()=>this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt"));
                 break;
               default:
                 console.log(`Downloading ${stream.Codec} Subtitle streams not yet supported`);
@@ -126,30 +124,57 @@ export class JFetch {
         }
       }
     }
-    return new FetchTask(vidpath, ()=>this.jserver.getFile(media.Id!), media.Size!, nfo, aux);
+
+    yield new MediaTask(vidpath, ()=>this.jserver.getFile(media.Id!), media.Size!);
+
+    if (with_images) {
+      yield* this.fetchImages(item, dirpath, `${medianame}-`);
+    }
+  }
+
+  private async *fetchImages(item:Item, dirpath:string, prefix?:string) {
+    const images = await this.jserver.getItemImageInfo(item.Id);
+    for (const ii of images) {
+      const headers = await this.jserver.getItemImageHeaders(item.Id, ii.ImageType, ii.ImageIndex);
+      const contenttype = headers.get("content-type");
+      const imageext = contenttype === "image/jpeg" ? "jpg" :
+        undefined;
+        
+      const imagename = ii.ImageType==="Primary" ?
+        (prefix?"thumb":"folder"):
+        ii.ImageType.toLowerCase();
+
+      const imagepath = path.join(
+        dirpath,
+        `${prefix??''}${imagename}${ii.ImageIndex?ii.ImageIndex:''}.${imageext}`
+      );
+      yield new ImageTask(imagepath, ()=>this.jserver.getItemImage(item.Id, ii.ImageType, ii.ImageIndex), ii.Size);
+    }
   }
 
   private async *fetchMovie(movie:Item) {
     const dirpath = path.join(await this.ItemPath(movie));
     for (const media of movie.MediaSources!) {
-      const m = this.fetchMedia(movie, dirpath, media);
-      if (m) { yield m; }
+      yield* this.fetchMedia(movie, dirpath, media);
     }
+    yield* this.fetchImages(movie, dirpath);
   }
 
   private async *fetchEpisode(episode:Item) {
     const dirpath = path.join(...await Promise.all([episode.SeriesId!, episode.SeasonId!].map(this.ItemPath, this)));
     for (const media of episode.MediaSources!) {
       if (media.Type === "Default") {
-        const m = this.fetchMedia(episode, dirpath, media);
-        if (m) { yield m; }
+        yield* this.fetchMedia(episode, dirpath, media, true);
       }
     }
   }
 
   private async *fetchSeason(season:Item, shallow?:boolean) {
-    const seasonnfo = path.join(...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)), "season.nfo");
-    yield new FetchTask(seasonnfo, makeNfo(season));
+    const dirpath = path.join(...await Promise.all([season.SeriesId!, season].map(this.ItemPath, this)));
+    const seasonnfo = path.join(dirpath, "season.nfo");
+    yield new NfoTask(seasonnfo, season);
+
+    yield* this.fetchImages(season, dirpath);
 
     if (!shallow) {
       const episodes = await this.jserver.getEpisodes(season.SeriesId!, season.Id);
@@ -161,8 +186,11 @@ export class JFetch {
   }
 
   private async *fetchSeries(series:Item, shallow?:boolean) {
-    const seriesnfo = path.join(await this.ItemPath(series), "tvshow.nfo");
-    yield new FetchTask(seriesnfo, makeNfo(series));
+    const dirpath = await this.ItemPath(series);
+    const seriesnfo = path.join(dirpath, "tvshow.nfo");
+    yield new NfoTask(seriesnfo, series);
+
+    yield* this.fetchImages(series, dirpath);
 
     if (!shallow) {
       const seasons = await this.jserver.getSeasons(series.Id);

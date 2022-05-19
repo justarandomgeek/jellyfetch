@@ -305,11 +305,26 @@ export interface MediaStream {
   IsAnamorphic?: boolean
 }
 
-export interface ItemQueryResult {
-    Items:Item[]
-    TotalRecordCount:Number
-    StartIndex:number
+export type ImageType = "Primary"|"Art"|"Backdrop"|"Banner"|"Logo"|"Thumb"|"Disc"|"Box"|"Screenshot"|"Menu"|"Chapter"|"BoxRear"|"Profile";
+
+export interface ImageInfo {
+  ImageType: ImageType
+  ImageIndex?: number
+  ImageTag?: string
+  Path?: string
+  BlurHash?: string
+  Height?: number
+  Width?: number
+  Size: number
 }
+
+interface QueryResult<T> {
+  Items:T[]
+  TotalRecordCount:Number
+  StartIndex:number
+}
+
+export type ItemQueryResult = QueryResult<Item>;
 
 export class Jellyfin {
   private static readonly deviceId = machineIdSync();
@@ -371,16 +386,16 @@ export class Jellyfin {
     return `fields=${this.ItemFields.join(',')}`;
   }
 
-  private async internalFetch(path:string, body?:BodyInit) {
+  private async internalFetch(path:string, body?:BodyInit, method?:RequestInit["method"]) {
     const headers = new Headers ({
       "X-Emby-Authorization": this.AuthorizationHeader,
     });
     const options:RequestInit = {
-      method: 'GET',
+      method: method??'GET',
       headers: headers,
     };
     if (body) {
-      options.method = "POST";
+      options.method = method??"POST";
       options.body = body;
       if (typeof body === 'string') {
         headers.append('Content-Type', 'application/json');
@@ -425,6 +440,24 @@ export class Jellyfin {
 
   public async getItemChildren(parentId:string) {
     return this.internalFetchJson<ItemQueryResult>(`/Users/${this.session!.UserId}/Items?ParentId=${parentId}&${this.FieldsQuery}`);
+  }
+
+  public async getItemImageInfo(itemId:string) {
+    return this.internalFetchJson<ImageInfo[]>(`/Items/${itemId}/Images`);
+  }
+
+  public async getItemImageHeaders(itemId:string, imageType:ImageType, imageIndex?:number) {
+    const index = imageIndex!==undefined?`/${imageIndex}`:'';
+    const result = await this.internalFetch(`/Items/${itemId}/Images/${imageType}${index}`, undefined, "HEAD");
+    if (!result.ok) { throw result.statusText; }
+    return result.headers;
+  }
+
+  public async getItemImage(itemId:string, imageType:ImageType, imageIndex?:number) {
+    const index = imageIndex!==undefined?`/${imageIndex}`:'';
+    const result = await this.internalFetch(`/Items/${itemId}/Images/${imageType}${index}`);
+    if (!result.ok) { throw result.statusText; }
+    return result.body!;
   }
 
   public async getSeasons(seriesId:string) {

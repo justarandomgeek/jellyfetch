@@ -1,4 +1,1 @@
 more complete nfo files?
-write all nfo first as one task?
-write all external subs as one task?
-this would allow video file task to use total filesize
