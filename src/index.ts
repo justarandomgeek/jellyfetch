@@ -226,12 +226,11 @@ program
         loop: false,
         choices: stats.map(s=>{
           const newsize = s.task.size ?
-            `${filesize(s.task.size)} Δ${filesize(s.task.size-s.stat.size)}`:
+            `${filesize(s.task.size)}`:
             'unknown';
           return {
             name: `${s.task.destpath} ${filesize(s.stat.size)} => ${newsize}`,
             value: s.task,
-            checked: s.task.size && s.stat.size < s.task.size && Math.abs(s.task.size-s.stat.size) > 16,
           };
         }),
       })).overwrite as FetchTask[];
