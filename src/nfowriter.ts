@@ -28,6 +28,7 @@ export function makeNfo(item: Item) {
   item.ProviderIds?.Imdb && root.ele(item.Type === "Series" ? "imdb_id" : "imdbid").txt(item.ProviderIds?.Imdb);
   item.ProviderIds?.TvRage && root.ele("tvrageid").txt(item.ProviderIds?.TvRage);
   item.ProviderIds?.Tmdb && root.ele("tmdbid").txt(item.ProviderIds?.Tmdb);
+  item.DisplayOrder && root.ele("displayorder").txt(item.DisplayOrder);
 
   switch (item.Type) {
     case "Series":
