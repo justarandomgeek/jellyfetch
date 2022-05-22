@@ -39,7 +39,7 @@
         "comma-style":"error",
         "comma-dangle": ["error", "always-multiline"],
         "key-spacing":"error",
-        "indent": ["error", 2, { "SwitchCase":1}],
+        "indent": ["error", 2, { "SwitchCase":1, "flatTernaryExpressions": true }],
         "curly": "error",
         "eqeqeq": [
             "error",
