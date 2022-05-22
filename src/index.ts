@@ -206,55 +206,59 @@ program
     const jfetch = await getAuthedJellyfinApi(server);
 
     const item = await jfetch.fetchItemInfo(id);
-    let tasks = [];
-    for await (const task of jfetch.fetchItem(item, opts.shallow)) { tasks.push(task); }
-    const pstats = [];
-    for (const task of tasks) {
-      pstats.push(
-        fsp.stat(path.join(opts.dest, task.destpath))
-          .then(s=>({task: task, stat: s}))
-          .catch(()=>undefined)
-      );
-    }
-    
-    const stats = <{task:FetchTask; stat:fs.Stats}[]> (await Promise.all(pstats)).filter(s=>!!s);
-    if (stats.length > 0) {
-      const overwrite = (await inquirer.prompt({
-        message: "Overwrite existing files?",
-        name: "overwrite",
+    let tasks:{task:FetchTask; stat?:fs.Stats}[] = await async.map(<any>jfetch.fetchItem(item, opts.shallow), async (task:FetchTask)=>{
+      return fsp.stat(path.join(opts.dest, task.destpath))
+        .catch(()=>undefined)
+        .then(s=>({task: task, stat: s}));
+    });
+
+    if (opts.list) {
+      tasks = (await inquirer.prompt({
+        message: `Files to download:`,
+        name: "tasks",
         type: 'checkbox',
         loop: false,
-        choices: stats.map(s=>{
-          const newsize = s.task.size ?
-            `${filesize(s.task.size)}`:
-            'unknown';
+        choices: tasks.map(t=>{
+          const tasksize = 
+            t.stat ? `${filesize(t.stat!.size)} => ${t.task.size ? filesize(t.task.size): 'unknown'}` :
+            t.task.size ? filesize(t.task.size) :
+            '';
           return {
-            name: `${s.task.destpath} ${filesize(s.stat.size)} => ${newsize}`,
-            value: s.task,
+            name: `${t.task.destpath} ${tasksize}`,
+            value: t,
+            checked: !t.stat,
           };
         }),
-      })).overwrite as FetchTask[];
-      const skip = stats.map(s=>s.task).filter(s=>!overwrite.includes(s));
-      tasks = tasks.filter(t=>!skip.includes(t));
-    }
-    
-    let totalsize = 0;
-    for (const task of tasks) {
-      totalsize += task.size??0;
-      if (opts.list) {
-        console.log(`${task.destpath} ${task.size?filesize(task.size):''}`);
+      })).tasks;
+    } else {
+      const withstats = tasks.filter(t=>t.stat);
+      if (withstats.length > 0) {
+        const overwrite: typeof withstats = (await inquirer.prompt({
+          message: "Overwrite existing files?",
+          name: "overwrite",
+          type: 'checkbox',
+          loop: false,
+          choices: withstats.map(t=>{
+            return {
+              name: `${t.task.destpath} ${filesize(t.stat!.size)} => ${t.task.size ? filesize(t.task.size): 'unknown'}`,
+              value: t,
+            };
+          }),
+        })).overwrite;
+        const skip = tasks.filter(s=>!overwrite.includes(s));
+        tasks = tasks.filter(t=>!skip.includes(t));
+      }
+
+      if (!(await inquirer.prompt({
+        message: `Download ${filesize(tasks.reduce((a, b)=>(a)+(b.task.size??0), 0))}?`,
+        name: "proceed",
+        type: "confirm",
+      })).proceed) {
+        return;
       }
     }
-    console.log(filesize(totalsize));
-    if (!(await inquirer.prompt({
-      message: "Proceed?",
-      name: "proceed",
-      type: "confirm",
-    })).proceed) {
-      return;
-    }
 
-    const grouped_tasks = tasks.reduce(function (r, a) {
+    const grouped_tasks = tasks.map(t=>t.task).reduce(function (r, a) {
       r[a.type] = r[a.type] || [];
       r[a.type].push(a);
       return r;
