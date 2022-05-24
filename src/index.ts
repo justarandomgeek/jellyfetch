@@ -106,7 +106,16 @@ async function writeFileProgress(dest:string, file:string, data:string|Promise<N
     progress=>bar && bar.update(progress.transferred, {speed: filesize(progress.speed)+"/s", filename: filename})
   );
   await dir;
-  await pipelineAsync(await data, ps, fs.createWriteStream(filepath));
+  try {
+    await pipelineAsync(await data, ps, fs.createWriteStream(filepath+".tmp"));
+    await fsp.rename(filepath+".tmp", filepath);
+  } catch (error) {
+    try {
+      fsp.unlink(filepath+".tmp");
+    } catch (error) {
+
+    }
+  }
   const progress = ps.progress();
   if (bar) {
     bar.stop();
