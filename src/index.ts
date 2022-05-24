@@ -200,7 +200,7 @@ program
   .version('0.0.1')
   .description("download content from a jellyfin server")
   .argument("<server>", "Base url of the server")
-  .argument("<id>", "ItemID to fetch.")
+  .argument("<ids...>", "ItemIDs to fetch.")
   .option("-d, --dest <destination>", "Destination folder", ".")
   .option("-l, --list", "List files that will be downloaded.")
   .option("-s, --shallow", "When fetching Series or Season items, fetch only the specified item, not children.")
@@ -209,13 +209,15 @@ program
   .option("-i, --no-image", "Skip Image files.")
   .option("-x, --no-external", "Skip external media streams (usually subs).")
 
-  .action(async (server:string, id:string)=>{
+  .action(async (server:string, ids:string[])=>{
     const opts = program.opts<ProgramOptions>();
     const jfetch = await getAuthedJellyfinApi(server);
 
-    const item = await jfetch.fetchItemInfo(id);
+    const items = await Promise.all(ids.map(id=>jfetch.fetchItemInfo(id)));
+    items.map(item=>console.log(`${item.Id} ${item.SeriesName} ${item.SeasonName} ${item.Name} ${item.RecursiveItemCount}`));
     let tasks = await Promise.all(
-      (await fromAsync(jfetch.fetchItem(item, opts.shallow)))
+      (await Promise.all(items.map(async item=>fromAsync(jfetch.fetchItem(item, opts.shallow)))))
+        .flat()
         .filter(task=>opts[task.type])
         .map(async task=>{
           return fsp.stat(path.join(opts.dest, task.destpath))
