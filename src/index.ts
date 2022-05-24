@@ -19,6 +19,14 @@ import cliprog, { MultiBar } from "cli-progress";
 import * as async from 'async';
 import { makeNfo } from './nfowriter.js';
 
+async function fromAsync<T>(gen: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const x of gen) {
+    out.push(x);
+  }
+  return out;
+}
+
 interface ServerInfo {
   baseUrl:string
   accessToken?:string
@@ -206,11 +214,14 @@ program
     const jfetch = await getAuthedJellyfinApi(server);
 
     const item = await jfetch.fetchItemInfo(id);
-    let tasks:{task:FetchTask; stat?:fs.Stats}[] = await async.map(<any>jfetch.fetchItem(item, opts.shallow), async (task:FetchTask)=>{
-      return fsp.stat(path.join(opts.dest, task.destpath))
-        .catch(()=>undefined)
-        .then(s=>({task: task, stat: s}));
-    });
+    let tasks = await Promise.all(
+      (await fromAsync(jfetch.fetchItem(item, opts.shallow)))
+        .filter(task=>opts[task.type])
+        .map(async task=>{
+          return fsp.stat(path.join(opts.dest, task.destpath))
+            .catch(()=>undefined)
+            .then(stat=>({task: task, stat: stat}));
+        }));
 
     if (opts.list) {
       tasks = (await inquirer.prompt({
@@ -218,15 +229,15 @@ program
         name: "tasks",
         type: 'checkbox',
         loop: false,
-        choices: tasks.map(t=>{
+        choices: tasks.map(task=>{
           const tasksize = 
-            t.stat ? `${filesize(t.stat!.size)} => ${t.task.size ? filesize(t.task.size): 'unknown'}` :
-            t.task.size ? filesize(t.task.size) :
+            task.stat ? `${filesize(task.stat.size)} => ${task.task.size ? filesize(task.task.size): 'unknown'}` :
+            task.task.size ? filesize(task.task.size) :
             '';
           return {
-            name: `${t.task.destpath} ${tasksize}`,
-            value: t,
-            checked: !t.stat,
+            name: `${task.task.destpath} ${tasksize}`,
+            value: task,
+            checked: !task.stat,
           };
         }),
       })).tasks;
@@ -245,7 +256,7 @@ program
             };
           }),
         })).overwrite;
-        const skip = tasks.filter(s=>!overwrite.includes(s));
+        const skip = withstats.filter(s=>!overwrite.includes(s));
         tasks = tasks.filter(t=>!skip.includes(t));
       }
 
