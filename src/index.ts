@@ -98,7 +98,6 @@ const bars = Object.assign(new MultiBar({
               return cliprog.Format.ValueFormat(v, options, type);
           }
         },
-        autopadding: true,
         emptyOnZero: true,
       }, options));
   },
