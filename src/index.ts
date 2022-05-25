@@ -69,7 +69,7 @@ async function getAuthedJellyfinApi(server:string) {
 
 
 
-const bars = new MultiBar({
+const bars = Object.assign(new MultiBar({
   format: '[{bar}] | {percentage}% | {value} / {total} | {filename}  {speed}',
   formatValue: function(v, options, type) {
     switch (type) {
@@ -82,6 +82,26 @@ const bars = new MultiBar({
   },
   autopadding: true,
   forceRedraw: true,
+}), {
+  create_count: function(total:number, message:string, startValue:number=0, payload?:any, options?:cliprog.Options) {
+    return (bars).create(total, startValue,
+      Object.assign({}, payload),
+      Object.assign<cliprog.Options, cliprog.Options|undefined>({
+        format: `[{bar}] | {percentage}% | {value}    / {total}    | ${message}`,
+        formatValue: function(v, options, type) {
+          switch (type) {
+            case 'total':
+              if (v===0) { return "?".padStart(7); }
+            case 'value':
+              return v.toString().padStart(7);
+            default:
+              return cliprog.Format.ValueFormat(v, options, type);
+          }
+        },
+        autopadding: true,
+        emptyOnZero: true,
+      }, options));
+  },
 });
 
 function toHHMMSS(totalseconds:number) {
@@ -141,28 +161,18 @@ export abstract class FetchTask {
 
 export class NfoTask extends FetchTask {
   readonly type = "nfo";
+  readonly data:string;
 
   constructor(
     readonly destpath:string,
-    readonly item:Item,
+    item:Item,
   ) {
     super(destpath);
+    this.data = makeNfo(item);
   }
 
-  private _data?:string;
-  private makeData() {
-    if (!this._data) {
-      this._data = makeNfo(this.item);
-    }
-  }
-
-  protected get data() {
-    this.makeData();
-    return this._data!;
-  }
   public get size() {
-    this.makeData();
-    return this._data!.length;
+    return this.data.length;
   }
 }
 
@@ -223,16 +233,38 @@ program
     const jfetch = await getAuthedJellyfinApi(server);
 
     const items = await Promise.all(ids.map(id=>jfetch.fetchItemInfo(id)));
-    items.map(item=>console.log(`${item.Id} ${item.SeriesName} ${item.SeasonName} ${item.Name} ${item.RecursiveItemCount}`));
-    let tasks = await Promise.all(
-      (await Promise.all(items.map(async item=>fromAsync(jfetch.fetchItem(item, opts.shallow)))))
-        .flat()
-        .filter(task=>opts[task.type])
-        .map(async task=>{
-          return fsp.stat(path.join(opts.dest, task.destpath))
+
+    items.map(item=>{
+      let message = item.Id;
+      if (item.Type) { message += " " + item.Type; }
+      if (item.SeriesName) { message += " " + item.SeriesName; }
+      if (item.SeasonName) { message += " " + item.SeasonName; }
+      if (item.Name) { message += " " + item.Name; }
+      if (item.RecursiveItemCount) {
+        message += ` [${item.RecursiveItemCount} items]`;
+      }
+      console.log(message);
+    });
+
+    let ptasks = [];
+    const tbar = bars.create_count(0, "Collecting metadata...");
+    for (const item of items) {
+      for await (const task of jfetch.fetchItem(item, opts.shallow)) {
+        if (opts[task.type]) {
+          ptasks.push(fsp.stat(path.join(opts.dest, task.destpath))
             .catch(()=>undefined)
-            .then(stat=>({task: task, stat: stat}));
-        }));
+            .then(stat=>{
+              tbar.increment();
+              return {task: task, stat: stat};
+            }));
+        }
+      }
+    }
+
+    let tasks = await Promise.all(ptasks);
+    tbar.stop();
+    bars.remove(tbar);
+    bars.stop();
 
     if (opts.list) {
       tasks = (await inquirer.prompt({
@@ -292,19 +324,7 @@ program
         const type = key as FetchType;
         const tasks = grouped_tasks[type];
         if (opts[type] && tasks.length > 0) {
-          const tbar = bars.create(tasks.length, 0, {}, {
-            format: `[{bar}] | {percentage}% | {value}    / {total}    | ${type}`,
-            formatValue: function(v, options, type) {
-              switch (type) {
-                case 'value':
-                case 'total':
-                  return v.toString().padStart(7);
-                default:
-                  return cliprog.Format.ValueFormat(v, options, type);
-              }
-            },
-            autopadding: true,
-          });
+          const tbar = bars.create_count(tasks.length, type);
           const q = async.queue<FetchTask>(async(task)=>{
             await task.Execute(opts.dest);
             tbar.increment();
