@@ -84,7 +84,7 @@ const bars = Object.assign(new MultiBar({
   forceRedraw: true,
 }), {
   create_count: function(total:number, message:string, startValue:number=0, payload?:any, options?:cliprog.Options) {
-    return (bars).create(total, startValue,
+    return bars.create(total, startValue,
       Object.assign({}, payload),
       Object.assign<cliprog.Options, cliprog.Options|undefined>({
         format: `[{bar}] | {percentage}% | {value}    / {total}    | ${message}`,
