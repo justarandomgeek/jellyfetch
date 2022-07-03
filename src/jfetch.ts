@@ -106,12 +106,14 @@ export class JFetch {
         if (stream.Language) { streampath += `.${stream.Language}`; }
         if (stream.IsDefault) { streampath += `.default`; }
         if (stream.IsForced) { streampath += `.forced`; }
-        streampath += `.${stream.Codec}`;
         switch (stream.Type) {
           case "Subtitle":
             switch (stream.Codec) {
               case "srt":
-                yield new ExternalStreamTask(streampath, ()=>this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt"));
+                yield new ExternalStreamTask(`${streampath}.srt`, ()=>this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "srt"));
+                break;
+              case "webvtt":
+                yield new ExternalStreamTask(`${streampath}.vtt`, ()=>this.jserver.getSubtitle(item.Id, media.Id!, stream.Index, "vtt"));
                 break;
               default:
                 console.log(`Downloading ${stream.Codec} Subtitle streams not yet supported`);
