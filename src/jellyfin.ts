@@ -352,8 +352,8 @@ export class Jellyfin {
     return this.session!;
   }
 
-  public get AccessToken(): string|undefined {
-    return this.accessToken;
+  public get AccessToken(): string {
+    return this.accessToken!;
   }
 
   private get AuthorizationHeader() {
