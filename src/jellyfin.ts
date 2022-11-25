@@ -1,6 +1,5 @@
 import fetch, { BodyInit, Headers, RequestInit } from 'node-fetch';
-import pkg from 'node-machine-id';
-const { machineIdSync } = pkg;
+import { machineIdSync } from 'node-machine-id';
 
 export interface SessionInfo {
     Client:string

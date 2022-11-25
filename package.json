@@ -1,16 +1,24 @@
 {
   "name": "jellyfetch",
-  "type": "module",
   "version": "0.0.1",
   "description": "download content from a jellyfin server",
-  "main": "./out/index.js",
+  "main": "./dist/index.js",
   "bin": {
-    "jellyfetch": "./out/index.js"
+    "jellyfetch": "./dist/index.js"
   },
+  "files": [
+    "./dist/index.js"
+  ],
   "scripts": {
-    "start": "ts-node src/index.ts",
-    "lint": "eslint -c .eslintrc.json --ext .ts ./src",
-    "build": "tsc -p .",
+    "lint": "eslint src --ext ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck-watch": "tsc -p tsconfig.json --noEmit --watch",
+    "esbuild": "ts-node ./build.ts",
+    "watch": "npm run -S esbuild -- --map --watch",
+    "build": "npm run -S esbuild -- --map",
+    "stats": "npm run -S build -- --minify --meta && esbuild-visualizer --metadata ./out/meta.json --filename ./out/stats.html",
+    "test": "npm run typecheck && npm run lint",
+    "start": "node dist/index.ts",
     "local": "sudo npm i -g && jellyfetch",
     "refresh": "rm -rf ./node_modules ./package-lock.json && npm install"
   },
@@ -24,12 +32,12 @@
     "@types/progress-stream": "^2.0.2",
     "@typescript-eslint/eslint-plugin": "^5.20.0",
     "@typescript-eslint/parser": "^5.20.0",
+    "esbuild": "^0.15.15",
+    "esbuild-visualizer": "^0.3.1",
     "eslint": "^8.14.0",
     "ts-node": "^10.7.0",
     "tsconfig-paths": "^3.14.1",
-    "typescript": "^4.6.3"
-  },
-  "dependencies": {
+    "typescript": "^4.6.3",
     "async": "^3.2.3",
     "cli-progress": "^3.10.0",
     "commander": "^9.2.0",
