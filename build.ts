@@ -9,12 +9,15 @@ program
   .option("--meta")
   .option("--minify")
   .option("--analyze")
-  .action(async (options:{map?:boolean; watch?:boolean; meta?:boolean; minify?:boolean; analyze?:boolean})=>{
+  .action(async (options: { map?: boolean; watch?: boolean; meta?: boolean; minify?: boolean; analyze?: boolean })=>{
     const result = await build({
       tsconfig: "./tsconfig.json",
       entryPoints: {
         index: "./src/index.ts",
       },
+      external: [
+        "keytar",
+      ],
       platform: "node",
       bundle: true,
       format: "cjs",

@@ -10,7 +10,6 @@ import filesize from 'filesize';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import { posix as path } from 'path';
-
 import { pipeline } from 'stream';
 import { promisify } from 'util';
 const pipelineAsync = promisify(pipeline);
@@ -19,31 +18,13 @@ import cliprog, { MultiBar } from "cli-progress";
 import * as async from 'async';
 import { makeNfo } from './nfowriter.js';
 
-async function fromAsync<T>(gen: AsyncIterable<T>): Promise<T[]> {
-  const out: T[] = [];
-  for await (const x of gen) {
-    out.push(x);
-  }
-  return out;
-}
-
-interface ServerInfo {
-  baseUrl:string
-  accessToken?:string
-};
-
 async function getAuthedJellyfinApi(server:string) {
-  let servers:ServerInfo[];
-  try {
-    servers = JSON.parse(await fsp.readFile("servers.json", "utf8"));
-  } catch (error) {
-    servers = [];
-  } 
-
-  let si = servers.find(s=>s.baseUrl===server);
+  const keytar = await import("keytar").catch(()=>undefined);
+  let token = await keytar?.findPassword(`jellyfetch:${server}`);
+  
   const jserver = await Jellyfin.getApiSession(
     server,
-    si?.accessToken,
+    token,
     ()=>inquirer.prompt<{username:string;password:string}>([
       {
         message: "Username:",
@@ -56,14 +37,10 @@ async function getAuthedJellyfinApi(server:string) {
         type: "password",
       },
     ]));
-  if (!si) {
-    si = {
-      baseUrl: server,
-    };
-    servers.push(si);
+  if (keytar && (token !== jserver.AccessToken)) {
+    //TODO prompt to save?
+    keytar.setPassword(`jellyfetch:${server}`, jserver.Session.UserName, jserver.AccessToken);
   }
-  si.accessToken = jserver.AccessToken;
-  await fsp.writeFile("servers.json", JSON.stringify(servers));
   return new JFetch(jserver);
 }
 

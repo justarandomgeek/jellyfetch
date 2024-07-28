@@ -330,10 +330,10 @@ export class Jellyfin {
   private session?:SessionInfo;
   public constructor(
         public readonly server:string,
-        private accessToken?:string) {
+        private accessToken:string|undefined|null) {
   }
 
-  public static async getApiSession(server:string, accessToken:string|undefined, credential_prompt:()=>Promise<{username:string;password:string}>) {
+  public static async getApiSession(server:string, accessToken:string|undefined|null, credential_prompt:()=>Promise<{username:string;password:string}>) {
     const j = new Jellyfin(server, accessToken);
     if (accessToken) {
       j.session = (await j.getSessions())?.[0];
