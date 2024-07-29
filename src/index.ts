@@ -6,7 +6,7 @@ import { JFetch } from './jfetch.js';
 import { program } from 'commander';
 import inquirer from "inquirer";
 
-import filesize from 'filesize';
+import { filesize } from 'filesize';
 import * as fs from 'fs';
 import * as fsp from 'fs/promises';
 import { posix as path } from 'path';
@@ -19,12 +19,9 @@ import * as async from 'async';
 import { makeNfo } from './nfowriter.js';
 
 async function getAuthedJellyfinApi(server:string) {
-  const keytar = await import("keytar").catch(()=>undefined);
-  let token = await keytar?.findPassword(`jellyfetch:${server}`);
-  
   const jserver = await Jellyfin.getApiSession(
     server,
-    token,
+    undefined,
     ()=>inquirer.prompt<{username:string;password:string}>([
       {
         message: "Username:",
@@ -37,10 +34,6 @@ async function getAuthedJellyfinApi(server:string) {
         type: "password",
       },
     ]));
-  if (keytar && (token !== jserver.AccessToken)) {
-    //TODO prompt to save?
-    keytar.setPassword(`jellyfetch:${server}`, jserver.Session.UserName, jserver.AccessToken);
-  }
   return new JFetch(jserver);
 }
 
