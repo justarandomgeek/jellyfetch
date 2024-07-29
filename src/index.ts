@@ -4,7 +4,7 @@ import { Item, Jellyfin } from './jellyfin.js';
 import { JFetch } from './jfetch.js';
 
 import { program } from 'commander';
-import inquirer from "inquirer";
+import * as inquirer from "@inquirer/prompts";
 
 import { filesize } from 'filesize';
 import * as fs from 'fs';
@@ -22,18 +22,16 @@ async function getAuthedJellyfinApi(server:string) {
   const jserver = await Jellyfin.getApiSession(
     server,
     undefined,
-    ()=>inquirer.prompt<{username:string;password:string}>([
-      {
-        message: "Username:",
-        name: "username",
-        type: "input",
-      },
-      {
-        message: "Password:",
-        name: "password",
-        type: "password",
-      },
-    ]));
+    async ()=>{
+      return {
+        username: await inquirer.input({
+          message: "Username:",
+        }),
+        password: await inquirer.password({
+          message: "Password:",
+        }),
+      };
+    });
   return new JFetch(jserver);
 }
 
@@ -236,10 +234,8 @@ program
     bars.stop();
 
     if (opts.list) {
-      tasks = (await inquirer.prompt({
+      tasks = (await inquirer.checkbox({
         message: `Files to download:`,
-        name: "tasks",
-        type: 'checkbox',
         loop: false,
         choices: tasks.map(task=>{
           const tasksize = 
@@ -252,14 +248,12 @@ program
             checked: !task.stat,
           };
         }),
-      })).tasks;
+      }));
     } else {
       const withstats = tasks.filter(t=>t.stat);
       if (withstats.length > 0) {
-        const overwrite: typeof withstats = (await inquirer.prompt({
+        const overwrite: typeof withstats = (await inquirer.checkbox({
           message: "Overwrite existing files?",
-          name: "overwrite",
-          type: 'checkbox',
           loop: false,
           choices: withstats.map(t=>{
             return {
@@ -267,16 +261,14 @@ program
               value: t,
             };
           }),
-        })).overwrite;
+        }));
         const skip = withstats.filter(s=>!overwrite.includes(s));
         tasks = tasks.filter(t=>!skip.includes(t));
       }
 
-      if (!(await inquirer.prompt({
+      if (!(await inquirer.confirm({
         message: `Download ${filesize(tasks.reduce((a, b)=>(a)+(b.task.size??0), 0))}?`,
-        name: "proceed",
-        type: "confirm",
-      })).proceed) {
+      }))) {
         return;
       }
     }
