@@ -24,6 +24,7 @@
   "author": "justarandomgeek",
   "license": "MIT",
   "devDependencies": {
+    "@inquirer/prompts": "^5.3.4",
     "@types/async": "^3.2.13",
     "@types/cli-progress": "^3.9.2",
     "@types/inquirer": "^9.0.7",
@@ -38,7 +39,6 @@
     "esbuild-visualizer": "^0.6.0",
     "eslint": "^8.57.0",
     "filesize": "^10.1.4",
-    "inquirer": "^10.1.2",
     "node-fetch": "^3.2.3",
     "node-machine-id": "^1.1.12",
     "progress-stream": "^2.0.0",
